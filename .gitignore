@@ -17,3 +17,6 @@ data/_*
 # Internal planning doc: hackathon strategy, competitor notes, judging analysis.
 # Stays local — CLAUDE.md carries the engineering context that belongs in public.
 PROGRESS.md
+
+# Run sheet: video script, submission copy, launch order. Strategy, stays local.
+LAUNCH.md
