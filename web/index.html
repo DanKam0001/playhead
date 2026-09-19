@@ -79,6 +79,39 @@
        color:var(--muted)}
   .hint code{font-family:"IBM Plex Mono",monospace; font-size:12.5px;
              background:#11141a; padding:1px 5px; border-radius:3px}
+
+  /* --- resume + notes --- */
+  .ghost{background:transparent; color:var(--muted); border:1px solid var(--line);
+         padding:6px 12px; font-size:13px; border-radius:4px; cursor:pointer;
+         display:inline-block; line-height:1.3}
+  .ghost:hover{color:var(--ink); border-color:var(--muted)}
+  .ghost:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
+
+  #resume{display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+          margin-top:14px; padding-top:14px; border-top:1px solid var(--line);
+          font-size:14px; color:var(--muted)}
+  #resume b{color:var(--signal); font-family:"IBM Plex Mono",monospace; font-weight:500}
+
+  .noteshead{display:flex; align-items:center; justify-content:space-between;
+             gap:12px; flex-wrap:wrap; margin-bottom:12px}
+  .noteshead h2{font-family:"IBM Plex Mono",monospace; font-size:12px;
+                letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
+                font-weight:400; margin:0}
+  #notecount{color:var(--signal)}
+  #noteactions{display:flex; gap:8px}
+
+  #notelist{list-style:none; margin:0; padding:0; max-height:40vh; overflow-y:auto}
+  #notelist li{display:grid; grid-template-columns:62px 1fr; gap:3px 14px;
+               padding:12px 0; border-top:1px solid var(--line)}
+  #notelist li:first-child{border-top:0; padding-top:0}
+  #notelist .at{grid-row:span 2; align-self:start; background:transparent;
+                color:var(--accent); border:0; padding:0;
+                font-family:"IBM Plex Mono",monospace; font-size:13px;
+                font-variant-numeric:tabular-nums; cursor:pointer; text-align:left}
+  #notelist .at:hover{color:var(--signal); text-decoration:underline}
+  #notelist .q{font-size:14.5px; color:var(--ink)}
+  #notelist .a{font-family:Spectral,Georgia,serif; font-size:14.5px;
+               line-height:1.5; color:var(--muted)}
 </style>
 </head>
 <body>
@@ -94,10 +127,31 @@
       <span id="clock">00:00</span>
     </div>
     <div id="status" data-state="idle">not connected</div>
+    <div id="resume" hidden>
+      <span>You stopped at <b id="resumeat">00:00</b> last time.</span>
+      <button class="ghost" id="resumebtn" type="button">Pick up there</button>
+      <button class="ghost" id="resumedismiss" type="button">Start over</button>
+    </div>
   </div>
 
   <div class="panel" id="transcript">
     <p class="empty">Press start, let it play, then just talk over it.</p>
+  </div>
+
+  <div class="panel">
+    <div class="noteshead">
+      <h2>Your notes <span id="notecount"></span></h2>
+      <span id="noteactions" hidden>
+        <button class="ghost" id="export" type="button">Export</button>
+        <label class="ghost" for="importfile" tabindex="0">Import</label>
+        <input id="importfile" type="file" accept=".md,.json,text/markdown" hidden>
+        <button class="ghost" id="clearnotes" type="button">Clear</button>
+      </span>
+    </div>
+    <p class="empty" id="notesempty">Every question you ask is kept here with its place in
+      the book &mdash; a map of where you got stuck. Export it to keep it, or to carry it
+      to another machine.</p>
+    <ol id="notelist"></ol>
   </div>
 
   <div class="panel">

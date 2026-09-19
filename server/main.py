@@ -69,6 +69,32 @@ def report_playhead(p: Playhead):
     return {"ok": True, "seek": seek} if seek is not None else {"ok": True}
 
 
+class PriorQuestion(BaseModel):
+    t: float = 0.0
+    q: str
+
+
+class ContextPost(BaseModel):
+    session_id: Optional[str] = None
+    questions: list[PriorQuestion] = []
+
+
+@app.post("/api/context")
+def set_context(c: ContextPost):
+    """What this listener asked in earlier sessions.
+
+    Notes live in the listener's browser, not here -- there are no accounts.
+    The browser hands over a short digest at connect time so the agent has some
+    continuity, and it expires with the session.
+    """
+    if not c.questions:
+        return {"ok": True, "carried": 0}
+    lines = [f"- at {int(q.t)//60}:{int(q.t)%60:02d}, they asked: {q.q.strip()[:160]}"
+             for q in c.questions[-8:] if q.q.strip()]
+    playheads.set_context(c.session_id, chr(10).join(lines))
+    return {"ok": True, "carried": len(lines)}
+
+
 @app.get("/api/session")
 def new_session():
     """Mint a short-lived agent token plus the session id the browser will use."""
@@ -119,6 +145,11 @@ def passage_at_playhead(call: ToolCall):
     parts = [f"The listener is {int(t)//60} minutes {int(t)%60} seconds into the book.",
              "This is what they have just heard:",
              " ".join(c.text for c in near)]
+
+    prior = playheads.get_context(call.session_id)
+    if prior:
+        parts += ["", "This listener has asked before:", prior,
+                  "Only mention this if it is relevant to what they just asked."]
 
     if call.search:
         far = _search_earlier(call.search, t, exclude={c.id for c in near})

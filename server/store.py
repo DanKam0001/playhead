@@ -23,6 +23,7 @@ from typing import Optional, Protocol
 TTL_SECONDS = 3600
 LATEST_KEY = "echoread:latest"
 SEEK_LATEST_KEY = "echoread:seek:latest"
+CTX_LATEST_KEY = "echoread:ctx:latest"
 # A requested jump is consumed once. Leaving it set would drag the
 # listener back to the same spot on every heartbeat.
 SEEK_TTL_SECONDS = 30
@@ -33,6 +34,8 @@ class PlayheadStore(Protocol):
     def get(self, session_id: Optional[str]) -> Optional[float]: ...
     def request_seek(self, session_id: Optional[str], seconds: float) -> None: ...
     def take_seek(self, session_id: Optional[str]) -> Optional[float]: ...
+    def set_context(self, session_id: Optional[str], text: str) -> None: ...
+    def get_context(self, session_id: Optional[str]) -> Optional[str]: ...
 
 
 class MemoryStore:
@@ -41,6 +44,7 @@ class MemoryStore:
     def __init__(self):
         self._d: dict[str, tuple[float, float]] = {}
         self._seeks: dict[str, tuple[float, float]] = {}
+        self._ctx: dict[str, str] = {}
 
     def set(self, session_id: str, seconds: float) -> None:
         self._prune()
@@ -70,6 +74,15 @@ class MemoryStore:
             if hit and time.time() - hit[1] < SEEK_TTL_SECONDS:
                 self._seeks.pop("latest", None)
                 return hit[0]
+        return None
+
+    def set_context(self, session_id: Optional[str], text: str) -> None:
+        self._ctx[session_id or "latest"] = text
+
+    def get_context(self, session_id: Optional[str]) -> Optional[str]:
+        for key in ([session_id] if session_id else []) + ["latest"]:
+            if key in self._ctx:
+                return self._ctx[key]
         return None
 
     @property
@@ -141,6 +154,24 @@ class RedisStore:
                     except Exception:
                         pass
                 return seconds
+        return None
+
+    def set_context(self, session_id: Optional[str], text: str) -> None:
+        for key in ([f"echoread:ctx:{session_id}"] if session_id else []) + [CTX_LATEST_KEY]:
+            try:
+                self._cmd("set", key, text, "EX", str(TTL_SECONDS))
+            except Exception as exc:
+                print(f"[store] redis context set failed: {exc}")
+
+    def get_context(self, session_id: Optional[str]) -> Optional[str]:
+        for key in ([f"echoread:ctx:{session_id}"] if session_id else []) + [CTX_LATEST_KEY]:
+            try:
+                raw = self._cmd("get", key)
+            except Exception as exc:
+                print(f"[store] redis context get failed: {exc}")
+                return None
+            if raw:
+                return str(raw)
         return None
 
     @property

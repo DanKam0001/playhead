@@ -176,6 +176,149 @@ function flushReply() {
   playCursor = 0;
 }
 
+// ---------- notes ----------
+//
+// The questions someone asks are a map of where the book lost them, so they
+// are worth keeping. This is all per-browser: no account, no server copy. The
+// export file is how notes move between machines, and it is also what the
+// import reads back.
+
+const NOTES_KEY = "echoread:notes";
+const POS_KEY = "echoread:pos";
+let notes = [];
+let pendingQ = null;
+
+// Private windows and blocked site data make these throw rather than return
+// empty, so every access is guarded and the page works with no storage at all.
+function storageGet(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (_) { return fallback; }
+}
+
+function storageSet(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* ignore */ }
+}
+
+function clockText(t) {
+  const m = String(Math.floor(t / 60)).padStart(2, "0");
+  const s = String(Math.floor(t % 60)).padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+function noteQuestion(text) {
+  // Capture the position now: by the time the answer arrives the book may have
+  // moved, and the note is only useful if it points where the question was asked.
+  pendingQ = { t: book.currentTime, q: text };
+}
+
+function noteAnswer(text) {
+  if (!pendingQ || !text) return;
+  notes.push({ t: Math.round(pendingQ.t), q: pendingQ.q, a: text, at: new Date().toISOString() });
+  pendingQ = null;
+  notes = notes.slice(-200);
+  storageSet(NOTES_KEY, notes);
+  renderNotes();
+}
+
+function renderNotes() {
+  const list = el("notelist");
+  if (!list) return;
+  el("notecount").textContent = notes.length ? String(notes.length) : "";
+  el("notesempty").hidden = notes.length > 0;
+  el("noteactions").hidden = notes.length === 0;
+  list.textContent = "";
+  notes.slice().reverse().forEach((n) => {
+    const li = document.createElement("li");
+    const at = document.createElement("button");
+    at.className = "at";
+    at.type = "button";
+    at.textContent = clockText(n.t);
+    at.title = "Play from here";
+    at.addEventListener("click", () => {
+      book.currentTime = n.t;
+      book.play().catch(() => {});
+    });
+    const q = document.createElement("span");
+    q.className = "q";
+    q.textContent = n.q;
+    const a = document.createElement("span");
+    a.className = "a";
+    a.textContent = n.a;
+    li.append(at, q, a);
+    list.appendChild(li);
+  });
+}
+
+function exportNotes() {
+  const lines = ["# EchoRead notes", "",
+                 "Book: " + (session ? session.book : "relativity"),
+                 "Exported: " + new Date().toLocaleString(), ""];
+  notes.forEach((n) => {
+    lines.push("## " + clockText(n.t), "", "**You asked:** " + n.q, "", n.a, "");
+  });
+  // A machine-readable copy rides along in a comment, so one file is both
+  // pleasant to read and importable.
+  lines.push("<!-- echoread:data " + JSON.stringify(notes) + " -->");
+
+  const blob = new Blob([lines.join(String.fromCharCode(10))], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "echoread-notes.md";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function importNotes(file) {
+  const text = await file.text();
+  const marker = "<!-- echoread:data ";
+  const i = text.indexOf(marker);
+  let incoming = null;
+  try {
+    incoming = i >= 0
+      ? JSON.parse(text.slice(i + marker.length, text.lastIndexOf("-->")))
+      : JSON.parse(text);
+  } catch (_) { incoming = null; }
+
+  if (!Array.isArray(incoming)) {
+    setStatus("no EchoRead notes in that file", "error");
+    return;
+  }
+  const seen = new Set(notes.map((n) => n.t + "|" + n.q));
+  incoming.forEach((n) => {
+    if (n && n.q && !seen.has(n.t + "|" + n.q)) notes.push(n);
+  });
+  notes.sort((x, y) => x.t - y.t);
+  storageSet(NOTES_KEY, notes);
+  renderNotes();
+  debug("imported " + incoming.length + " notes");
+  setStatus(`imported ${incoming.length} notes`, "idle");
+}
+
+// Where they stopped, so the next visit can pick it up.
+function rememberPosition() {
+  if (book.currentTime > 5) storageSet(POS_KEY, Math.round(book.currentTime));
+}
+
+function offerResume() {
+  const at = storageGet(POS_KEY, 0);
+  if (!at || at < 10) return;
+  el("resumeat").textContent = clockText(at);
+  el("resume").hidden = false;
+  el("resumebtn").addEventListener("click", () => {
+    book.currentTime = at;
+    el("resume").hidden = true;
+  });
+  el("resumedismiss").addEventListener("click", () => {
+    el("resume").hidden = true;
+    storageSet(POS_KEY, 0);
+  });
+}
+
 // ---------- session ----------
 
 async function start() {
@@ -188,6 +331,20 @@ async function start() {
     setStatus("backend error: " + e.message, "error");
     startBtn.disabled = false;
     return;
+  }
+
+  // Hand last session's questions to the backend, so the tool can remind the
+  // agent what this listener has already asked about. Questions only: enough
+  // for continuity, and far less to confuse it than whole past conversations.
+  if (notes.length) {
+    fetch("/api/context", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: session.session_id,
+        questions: notes.slice(-8).map((n) => ({ t: n.t, q: n.q })),
+      }),
+    }).catch(() => { /* continuity is a bonus, never a blocker */ });
   }
 
   ws = new WebSocket(`${WS_URL}?token=${encodeURIComponent(session.token)}`);
@@ -250,6 +407,7 @@ async function start() {
         if (partial) partial.remove();
         partial = null;
         line("you", m.text || "");
+        noteQuestion(m.text || "");
         pauseBook();
         setStatus("thinking", "busy");
         break;
@@ -270,6 +428,7 @@ async function start() {
 
       case "transcript.agent":
         line("echoread", m.text || "");
+        noteAnswer(m.text || "");
         break;
 
       case "reply.done":
@@ -293,8 +452,29 @@ async function start() {
 
 startBtn.addEventListener("click", start);
 
+let lastRemembered = 0;
 book.addEventListener("timeupdate", () => {
-  const t = book.currentTime;
-  el("clock").textContent =
-    `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+  el("clock").textContent = clockText(book.currentTime);
+  if (book.currentTime - lastRemembered > 5 || book.currentTime < lastRemembered) {
+    lastRemembered = book.currentTime;
+    rememberPosition();
+  }
 });
+book.addEventListener("pause", rememberPosition);
+window.addEventListener("beforeunload", rememberPosition);
+
+el("export").addEventListener("click", exportNotes);
+el("importfile").addEventListener("change", (e) => {
+  if (e.target.files[0]) importNotes(e.target.files[0]);
+  e.target.value = "";
+});
+el("clearnotes").addEventListener("click", () => {
+  if (!confirm("Delete all " + notes.length + " notes? The export file is the only copy.")) return;
+  notes = [];
+  storageSet(NOTES_KEY, notes);
+  renderNotes();
+});
+
+notes = storageGet(NOTES_KEY, []);
+renderNotes();
+offerResume();

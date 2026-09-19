@@ -117,6 +117,10 @@ never updates, and it latches on forever. Hence calibrating before arming.
 | Warm APIs at startup | First Gemini call costs ~3 s more than the rest; that's the on-camera one. |
 | Adaptive stitch | 0.45 s for a complete-sounding question, 1.1 s for a fragment. The largest delay we control — bigger than the LLM call. |
 | Hold intent | "Hold on." is a placeholder, not a question. Answering it talks over the user and their real question gets dropped. |
+| Two tools, mirrored | `passage_at_playhead` turns position into meaning; `go_to_topic` turns meaning into position. Same insight, both directions. Don't add a third without a reason this good. |
+| The seek rides the playhead heartbeat | The agent runs on AssemblyAI's servers and cannot touch the page. `go_to_topic` leaves a position in Redis; the browser's once-a-second report collects it. GETDEL, so a jump happens once. |
+| Spoiler cap does NOT apply to `go_to_topic` | The cap stops the agent *volunteering* what is ahead. Being asked to go there is consent. |
+| Notes live in the browser, not the server | No accounts, no auth, no storage to secure, 11 days before a deadline. The export file is how they move between machines; `/api/context` carries a digest of past *questions* (not answers) for continuity. |
 | Streaming TTS kept but **measured no win** | 2.35 s vs 2.49 s; replies are ~250 chars so time-to-first-token dominates. Settled — don't redo this experiment. |
 
 ## Editing gotchas on this machine (cost real debugging time)
@@ -150,8 +154,8 @@ but changed nothing, producing a `NameError` that only surfaced mid-demo.
 
 | File | Role |
 |---|---|
-| `server/main.py` | FastAPI: `/api/session` (token mint), `/api/playhead`, `/tools/passage_at_playhead`, `/api/health` |
-| `server/store.py` | Playhead store — Upstash Redis in prod, memory locally |
+| `server/main.py` | FastAPI: `/api/session` (token mint), `/api/playhead`, `/api/context`, `/tools/passage_at_playhead`, `/tools/go_to_topic`, `/api/health` |
+| `server/store.py` | Shared state — playhead, pending seek, prior-session context. Upstash Redis in prod, memory locally |
 | `server/agent.json` | The stored agent: system prompt + the one HTTP tool |
 | `scripts/create_agent.py` | Publish/update the agent. Tool URL host must resolve, so deploy first |
 | `web/index.html`, `web/app.js` | Browser client (source of truth — copy to `public/`) |
@@ -292,3 +296,32 @@ keep it.
   real fix for multiple listeners is out-of-band, not a parameter.
 - (Browser) `createScriptProcessor` accepts only powers of two; `1200` threw
   `IndexSizeError` and read as "microphone blocked".
+
+## Open and untested (as of 2026-09-19)
+
+- **Speaker mode (no headphones) has never been tested.** The old "headphones
+  are non-negotiable" line is a *desktop-era* constraint that got repeated by
+  mistake: the browser cancels its own output (the book and the reply both play
+  through the page, and the mic asks for `echoCancellation`), and the book ducks
+  to 12% on speech. So it *should* work on speakers. Nobody has watched it. Two
+  failure modes to look for: the agent replying to its own voice, or ducking +
+  cancellation eating the listener's voice too. The user was asked to test this
+  before filming - find out what they saw.
+- **Notes, export/import, resume and `/api/context` shipped 2026-09-19 and have
+  been verified by curl, not by a human in a browser.** The continuity path
+  (browser POSTs past questions -> Redis -> appended to the tool response) is
+  confirmed working server-side.
+- **The agent still may answer a fragment** if the listener pauses mid-question.
+  Fix via the stored agent's turn detection, not client-side stitching.
+- The agent does not reliably pass `session_id` to tools, so the store falls
+  back to the freshest playhead. Correct for one listener; wrong for many.
+
+## Demo / submission material
+
+- Shot list, positioning and paste-ready submission copy:
+  https://claude.ai/artifact/9nXiQ5BQPHngK2FCpMJMsR
+- The video is **2:00**, seven shots. Shot 4 (`compare_rag.py`, the 17:25 case)
+  is the one that carries the entry.
+- **Do not pitch the driving use case.** It invites "isn't that illegal with
+  headphones?" and it is the weakest example. Lead with learning by ear:
+  blindness, dyslexia, or reading being work.
