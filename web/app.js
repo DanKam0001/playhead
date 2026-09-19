@@ -4,9 +4,10 @@
 // token and the browser connects straight to AssemblyAI. The API key never
 // reaches this file.
 //
-// The browser owns two things the agent cannot see: the audiobook playhead,
-// which it reports to the backend so the tool can read it, and the ducking of
-// playback the moment someone starts talking.
+// The browser owns three things the agent cannot see: the audiobook playhead,
+// which book is loaded, and the ducking of playback the moment someone starts
+// talking. The first two are reported to the backend so the tools can read
+// them; the third never leaves the page.
 
 const WS_URL = "wss://agents.assemblyai.com/v1/ws";
 const RATE = 24000;          // Voice Agent API is 24 kHz PCM16 both ways
@@ -33,7 +34,7 @@ function setStatus(text, state) {
 // being able to see what the machine was doing, so the page shows it.
 const debugLines = [];
 function debug(msg) {
-  const log = document.getElementById("log");
+  const log = el("log");
   if (!log) return;
   const t = new Date().toLocaleTimeString([], { hour12: false });
   debugLines.unshift(t + "  " + msg);
@@ -41,12 +42,37 @@ function debug(msg) {
   log.textContent = debugLines.join(String.fromCharCode(10));
 }
 
-function line(who, text, cls) {
+function clockText(t) {
+  if (!isFinite(t) || t < 0) t = 0;
+  const m = String(Math.floor(t / 60)).padStart(2, "0");
+  const s = String(Math.floor(t % 60)).padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+// ---------- the conversation ----------
+
+let ledeCleared = false;
+function turn(who, text, cls) {
+  if (!ledeCleared) {
+    transcriptEl.querySelectorAll(".lede").forEach((n) => n.remove());
+    ledeCleared = true;
+  }
+  const wrap = document.createElement("div");
+  wrap.className = "turn " + (cls || who);
+  const at = document.createElement("span");
+  at.className = "at";
+  at.textContent = clockText(book.currentTime);
+  const body = document.createElement("div");
+  body.className = "body";
+  const label = document.createElement("span");
+  label.className = "who";
+  label.textContent = who;
   const p = document.createElement("p");
-  p.className = "line " + (cls || who);
-  p.innerHTML = `<span class="who">${who}</span>${text}`;
-  transcriptEl.appendChild(p);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  p.textContent = text;
+  body.append(label, p);
+  wrap.append(at, body);
+  transcriptEl.appendChild(wrap);
+  wrap.scrollIntoView({ block: "nearest", behavior: "smooth" });
   return p;
 }
 
@@ -71,15 +97,19 @@ function resumeBook() {
   if (book.paused) book.play().catch(() => {});
 }
 
-// The tool runs on AssemblyAI's servers and has no idea where playback is, so
-// the position has to be reported out of band.
+// The tool runs on AssemblyAI's servers and has no idea where playback is, or
+// which book is loaded, so both are reported out of band.
 async function reportPlayhead() {
   if (!session) return;
   try {
     const res = await fetch("/api/playhead", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: session.session_id, seconds: book.currentTime }),
+      body: JSON.stringify({
+        session_id: session.session_id,
+        seconds: book.currentTime,
+        book: currentBook ? currentBook.id : null,
+      }),
     });
     // The reply can carry a jump. go_to_topic runs on AssemblyAI's servers and
     // cannot touch this page, so it leaves a position behind and we collect it.
@@ -93,10 +123,381 @@ function applySeek(seconds) {
   // Suppress the usual rewind-on-resume: the listener asked to be here, and
   // backing up 3 s from a deliberate jump is just wrong.
   justSeeked = true;
-  const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
-  const ss = String(Math.floor(seconds % 60)).padStart(2, "0");
-  debug(`jumped to ${mm}:${ss}`);
-  line("echoread", `<em>Jumped to ${mm}:${ss}</em>`);
+  debug(`jumped to ${clockText(seconds)}`);
+  turn("echoread", "Jumped to " + clockText(seconds), "system");
+}
+
+// ---------- the spine ----------
+//
+// The whole book as one vertical axis: how far in the listener is, and where
+// each question was asked. Doubles as the scrubber, so position is read and
+// set in the same place.
+
+function paintSpine() {
+  const dur = duration();
+  const frac = dur ? Math.min(1, book.currentTime / dur) : 0;
+  el("spinefill").style.height = (frac * 100).toFixed(2) + "%";
+  el("spinecursor").style.top = (frac * 100).toFixed(2) + "%";
+  el("clock").textContent = clockText(book.currentTime);
+  el("total").textContent = "/ " + clockText(dur);
+  const spine = el("spine");
+  spine.setAttribute("aria-valuemax", Math.round(dur));
+  spine.setAttribute("aria-valuenow", Math.round(book.currentTime));
+  spine.setAttribute("aria-valuetext", clockText(book.currentTime));
+}
+
+function duration() {
+  if (isFinite(book.duration) && book.duration > 0) return book.duration;
+  return currentBook && currentBook.duration ? currentBook.duration : 0;
+}
+
+function renderMarks() {
+  const holder = el("spinemarks");
+  const dur = duration();
+  holder.textContent = "";
+  if (!dur) return;
+  notes.forEach((n) => {
+    const b = document.createElement("button");
+    b.className = "mark";
+    b.type = "button";
+    b.style.top = Math.min(99, (n.t / dur) * 100).toFixed(2) + "%";
+    b.setAttribute("aria-label", `Play from ${clockText(n.t)}: ${n.q}`);
+    const label = document.createElement("span");
+    label.textContent = n.q;
+    b.append(label);
+    b.addEventListener("click", () => {
+      book.currentTime = n.t;
+      book.play().catch(() => {});
+    });
+    holder.appendChild(b);
+  });
+}
+
+function seekFromEvent(e) {
+  const rect = el("spine").getBoundingClientRect();
+  const y = (e.clientY !== undefined ? e.clientY : e.touches[0].clientY) - rect.top;
+  const dur = duration();
+  if (!dur) return;
+  book.currentTime = Math.max(0, Math.min(dur, (y / rect.height) * dur));
+  paintSpine();
+}
+
+// ---------- notes ----------
+//
+// The questions someone asks are a map of where the book lost them, so they
+// are worth keeping. This is all per-browser: no account, no server copy. The
+// export file is how notes move between machines, and it is also what the
+// import reads back. Notes are per book -- questions about one book are noise
+// against another.
+
+let notes = [];
+let pendingQ = null;
+
+const notesKey = () => "echoread:notes:" + (currentBook ? currentBook.id : "relativity");
+const posKey = () => "echoread:pos:" + (currentBook ? currentBook.id : "relativity");
+
+// Private windows and blocked site data make these throw rather than return
+// empty, so every access is guarded and the page works with no storage at all.
+function storageGet(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (_) { return fallback; }
+}
+
+function storageSet(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* ignore */ }
+}
+
+function noteQuestion(text) {
+  // Capture the position now: by the time the answer arrives the book may have
+  // moved, and the note is only useful if it points where the question was asked.
+  pendingQ = { t: book.currentTime, q: text };
+}
+
+function noteAnswer(text) {
+  if (!pendingQ || !text) return;
+  notes.push({ t: Math.round(pendingQ.t), q: pendingQ.q, a: text, at: new Date().toISOString() });
+  pendingQ = null;
+  notes = notes.slice(-200);
+  storageSet(notesKey(), notes);
+  renderNotes();
+}
+
+function renderNotes() {
+  el("noteactions").hidden = notes.length === 0;
+  el("railnote").textContent = notes.length
+    ? `${notes.length} question${notes.length > 1 ? "s" : ""} on this book. Click one to play from there.`
+    : "Your questions get pinned to the spine at the moment you asked them — a map of where the book lost you.";
+  renderMarks();
+}
+
+function exportNotes() {
+  const lines = ["# EchoRead notes", "",
+                 "Book: " + (currentBook ? currentBook.title : "relativity"),
+                 "Exported: " + new Date().toLocaleString(), ""];
+  notes.forEach((n) => {
+    lines.push("## " + clockText(n.t), "", "**You asked:** " + n.q, "", n.a, "");
+  });
+  // A machine-readable copy rides along in a comment, so one file is both
+  // pleasant to read and importable.
+  lines.push("<!-- echoread:data " + JSON.stringify(notes) + " -->");
+
+  const blob = new Blob([lines.join(String.fromCharCode(10))], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "echoread-notes.md";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function importNotes(file) {
+  const text = await file.text();
+  const marker = "<!-- echoread:data ";
+  const i = text.indexOf(marker);
+  let incoming = null;
+  try {
+    incoming = i >= 0
+      ? JSON.parse(text.slice(i + marker.length, text.lastIndexOf("-->")))
+      : JSON.parse(text);
+  } catch (_) { incoming = null; }
+
+  if (!Array.isArray(incoming)) {
+    setStatus("no EchoRead notes in that file", "error");
+    return;
+  }
+  const seen = new Set(notes.map((n) => n.t + "|" + n.q));
+  incoming.forEach((n) => {
+    if (n && n.q && !seen.has(n.t + "|" + n.q)) notes.push(n);
+  });
+  notes.sort((x, y) => x.t - y.t);
+  storageSet(notesKey(), notes);
+  renderNotes();
+  debug("imported " + incoming.length + " notes");
+  setStatus(`imported ${incoming.length} notes`, "idle");
+}
+
+// Where they stopped, so the next visit can pick it up.
+function rememberPosition() {
+  if (book.currentTime > 5) storageSet(posKey(), Math.round(book.currentTime));
+}
+
+function offerResume() {
+  const at = storageGet(posKey(), 0);
+  const bar = el("resume");
+  if (!at || at < 10) { bar.hidden = true; return; }
+  el("resumeat").textContent = clockText(at);
+  bar.hidden = false;
+  el("resumebtn").onclick = () => {
+    book.currentTime = at;
+    bar.hidden = true;
+  };
+  el("resumedismiss").onclick = () => {
+    bar.hidden = true;
+    storageSet(posKey(), 0);
+  };
+}
+
+// ---------- the library ----------
+//
+// A book someone adds is transcribed, chunked at the reader's own pauses and
+// embedded against its timestamps -- the same index the shipped book uses, so
+// both tools work on it without knowing the difference. Indexing is driven by
+// polling: each poll advances the job one step, which is also where the
+// progress number comes from.
+
+let currentBook = null;
+let shelf = [];
+let localAudio = {};     // book id -> object URL, for files added this session
+let needsFile = false;   // the selected book came from a file we no longer hold
+
+function addStatus(msg, bad) {
+  const p = el("addstatus");
+  p.textContent = msg || "";
+  if (bad) p.dataset.bad = "1"; else delete p.dataset.bad;
+}
+
+async function loadShelf() {
+  try {
+    const data = await (await fetch("/api/books")).json();
+    shelf = data.books || [];
+  } catch (_) { shelf = []; }
+  renderShelf();
+  if (!currentBook) {
+    const saved = storageGet("echoread:book", null);
+    const pick = shelf.find((b) => b.id === saved) || shelf[0];
+    if (pick) selectBook(pick, true);
+  }
+  // Anything still indexing keeps getting nudged until it is done.
+  shelf.filter((b) => b.status === "transcribing" || b.status === "indexing")
+       .forEach((b) => pollBook(b.id));
+}
+
+function renderShelf() {
+  const list = el("shelf");
+  list.textContent = "";
+  shelf.forEach((b) => {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    if (currentBook && b.id === currentBook.id) btn.setAttribute("aria-current", "true");
+
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = b.title;
+    const m = document.createElement("span");
+    m.className = "m";
+    m.textContent = b.status === "ready"
+      ? `${clockText(b.duration)} · ${b.chunks}`
+      : (b.status === "failed" ? "failed" : b.progress + "%");
+    btn.append(t, m);
+
+    if (b.status !== "ready" && b.status !== "failed") {
+      const bar = document.createElement("span");
+      bar.className = "bar";
+      const i = document.createElement("i");
+      i.style.width = b.progress + "%";
+      bar.appendChild(i);
+      btn.appendChild(bar);
+    }
+    if (b.status === "failed" && b.error) btn.title = b.error;
+
+    btn.addEventListener("click", () => {
+      if (b.status !== "ready") {
+        addStatus(b.status === "failed" ? "That one failed: " + b.error : "Still indexing — give it a moment.", b.status === "failed");
+        return;
+      }
+      selectBook(b);
+    });
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
+}
+
+function selectBook(b, quiet) {
+  currentBook = b;
+  storageSet("echoread:book", b.id);
+  el("booktitle").textContent = b.title;
+
+  const src = b.audio_url || localAudio[b.id] || "";
+  needsFile = !src;
+  if (src) {
+    book.src = src;
+    book.load();
+  }
+  book.pause();
+  setPlayIcon(false);
+
+  // Notes and the resume point belong to the book, not the browser.
+  notes = storageGet(notesKey(), []);
+  pendingQ = null;
+  renderNotes();
+  offerResume();
+  paintSpine();
+  renderShelf();
+
+  if (needsFile) {
+    addStatus("“" + b.title + "” was added from a file on this device. Choose it again below to play it — the index is already built.", false);
+    el("librarybtn").setAttribute("aria-expanded", "true");
+    el("library").hidden = false;
+  } else if (!quiet) {
+    addStatus("");
+  }
+  // Tell the backend straight away, so a question asked before the first
+  // heartbeat still reaches the right book.
+  if (session) reportPlayhead();
+}
+
+async function pollBook(id) {
+  for (let i = 0; i < 240; i++) {
+    await new Promise((r) => setTimeout(r, 2500));
+    let rec;
+    try {
+      rec = await (await fetch("/api/books/" + encodeURIComponent(id))).json();
+    } catch (_) { continue; }
+    const at = shelf.findIndex((b) => b.id === rec.id);
+    if (at >= 0) shelf[at] = rec; else shelf.push(rec);
+    if (currentBook && currentBook.id === rec.id) currentBook = rec;
+    renderShelf();
+    if (rec.status === "ready") {
+      addStatus("“" + rec.title + "” is ready — " + rec.chunks + " passages indexed.");
+      debug("indexed " + rec.id + ": " + rec.chunks + " chunks");
+      return rec;
+    }
+    if (rec.status === "failed") {
+      addStatus("Indexing failed: " + rec.error, true);
+      return rec;
+    }
+    addStatus(rec.status === "transcribing"
+      ? "Transcribing — this takes a minute or two for a chapter."
+      : `Indexing passages … ${rec.progress}%`);
+  }
+}
+
+async function addByUrl() {
+  const url = el("addurl").value.trim();
+  if (!url) return;
+  el("addbtn").disabled = true;
+  addStatus("Sending it off to be transcribed …");
+  try {
+    const res = await fetch("/api/books", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ audio_url: url }),
+    });
+    const rec = await res.json();
+    if (!res.ok) throw new Error(rec.detail || "could not add that");
+    el("addurl").value = "";
+    shelf.push(rec);
+    renderShelf();
+    pollBook(rec.id);
+  } catch (e) {
+    addStatus(e.message, true);
+  } finally {
+    el("addbtn").disabled = false;
+  }
+}
+
+async function addByFile(file) {
+  if (!file) return;
+  // Re-binding audio to a book whose index already exists: no upload, no
+  // second transcription, just give the player something to play.
+  if (needsFile && currentBook) {
+    localAudio[currentBook.id] = URL.createObjectURL(file);
+    needsFile = false;
+    book.src = localAudio[currentBook.id];
+    book.load();
+    addStatus("Playing “" + currentBook.title + "” from your copy.");
+    return;
+  }
+  // The platform caps a request body at 4.5 MB. Checking here means an
+  // oversized file gets a useful sentence instead of an edge-level failure.
+  if (file.size > 4_400_000) {
+    addStatus("That file is " + (file.size / 1e6).toFixed(1) + " MB, and uploads here stop at 4 MB. "
+      + "Put it somewhere with a direct link (archive.org, Dropbox, S3) and paste the link above.", true);
+    return;
+  }
+  addStatus("Uploading …");
+  try {
+    const res = await fetch("/api/books/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream",
+                 "x-book-title": file.name.replace(/\.[^.]+$/, "") },
+      body: file,
+    });
+    const rec = await res.json();
+    if (!res.ok) throw new Error(rec.detail || "upload failed");
+    // The browser plays the listener's own copy; AssemblyAI got its own.
+    localAudio[rec.id] = URL.createObjectURL(file);
+    shelf.push(rec);
+    renderShelf();
+    pollBook(rec.id);
+  } catch (e) {
+    addStatus(e.message, true);
+  }
 }
 
 // ---------- audio plumbing ----------
@@ -176,152 +577,13 @@ function flushReply() {
   playCursor = 0;
 }
 
-// ---------- notes ----------
-//
-// The questions someone asks are a map of where the book lost them, so they
-// are worth keeping. This is all per-browser: no account, no server copy. The
-// export file is how notes move between machines, and it is also what the
-// import reads back.
-
-const NOTES_KEY = "echoread:notes";
-const POS_KEY = "echoread:pos";
-let notes = [];
-let pendingQ = null;
-
-// Private windows and blocked site data make these throw rather than return
-// empty, so every access is guarded and the page works with no storage at all.
-function storageGet(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch (_) { return fallback; }
-}
-
-function storageSet(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* ignore */ }
-}
-
-function clockText(t) {
-  const m = String(Math.floor(t / 60)).padStart(2, "0");
-  const s = String(Math.floor(t % 60)).padStart(2, "0");
-  return `${m}:${s}`;
-}
-
-function noteQuestion(text) {
-  // Capture the position now: by the time the answer arrives the book may have
-  // moved, and the note is only useful if it points where the question was asked.
-  pendingQ = { t: book.currentTime, q: text };
-}
-
-function noteAnswer(text) {
-  if (!pendingQ || !text) return;
-  notes.push({ t: Math.round(pendingQ.t), q: pendingQ.q, a: text, at: new Date().toISOString() });
-  pendingQ = null;
-  notes = notes.slice(-200);
-  storageSet(NOTES_KEY, notes);
-  renderNotes();
-}
-
-function renderNotes() {
-  const list = el("notelist");
-  if (!list) return;
-  el("notecount").textContent = notes.length ? String(notes.length) : "";
-  el("notesempty").hidden = notes.length > 0;
-  el("noteactions").hidden = notes.length === 0;
-  list.textContent = "";
-  notes.slice().reverse().forEach((n) => {
-    const li = document.createElement("li");
-    const at = document.createElement("button");
-    at.className = "at";
-    at.type = "button";
-    at.textContent = clockText(n.t);
-    at.title = "Play from here";
-    at.addEventListener("click", () => {
-      book.currentTime = n.t;
-      book.play().catch(() => {});
-    });
-    const q = document.createElement("span");
-    q.className = "q";
-    q.textContent = n.q;
-    const a = document.createElement("span");
-    a.className = "a";
-    a.textContent = n.a;
-    li.append(at, q, a);
-    list.appendChild(li);
-  });
-}
-
-function exportNotes() {
-  const lines = ["# EchoRead notes", "",
-                 "Book: " + (session ? session.book : "relativity"),
-                 "Exported: " + new Date().toLocaleString(), ""];
-  notes.forEach((n) => {
-    lines.push("## " + clockText(n.t), "", "**You asked:** " + n.q, "", n.a, "");
-  });
-  // A machine-readable copy rides along in a comment, so one file is both
-  // pleasant to read and importable.
-  lines.push("<!-- echoread:data " + JSON.stringify(notes) + " -->");
-
-  const blob = new Blob([lines.join(String.fromCharCode(10))], { type: "text/markdown" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "echoread-notes.md";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-async function importNotes(file) {
-  const text = await file.text();
-  const marker = "<!-- echoread:data ";
-  const i = text.indexOf(marker);
-  let incoming = null;
-  try {
-    incoming = i >= 0
-      ? JSON.parse(text.slice(i + marker.length, text.lastIndexOf("-->")))
-      : JSON.parse(text);
-  } catch (_) { incoming = null; }
-
-  if (!Array.isArray(incoming)) {
-    setStatus("no EchoRead notes in that file", "error");
-    return;
-  }
-  const seen = new Set(notes.map((n) => n.t + "|" + n.q));
-  incoming.forEach((n) => {
-    if (n && n.q && !seen.has(n.t + "|" + n.q)) notes.push(n);
-  });
-  notes.sort((x, y) => x.t - y.t);
-  storageSet(NOTES_KEY, notes);
-  renderNotes();
-  debug("imported " + incoming.length + " notes");
-  setStatus(`imported ${incoming.length} notes`, "idle");
-}
-
-// Where they stopped, so the next visit can pick it up.
-function rememberPosition() {
-  if (book.currentTime > 5) storageSet(POS_KEY, Math.round(book.currentTime));
-}
-
-function offerResume() {
-  const at = storageGet(POS_KEY, 0);
-  if (!at || at < 10) return;
-  el("resumeat").textContent = clockText(at);
-  el("resume").hidden = false;
-  el("resumebtn").addEventListener("click", () => {
-    book.currentTime = at;
-    el("resume").hidden = true;
-  });
-  el("resumedismiss").addEventListener("click", () => {
-    el("resume").hidden = true;
-    storageSet(POS_KEY, 0);
-  });
-}
-
 // ---------- session ----------
 
 async function start() {
+  if (needsFile) {
+    addStatus("This book has no audio loaded — choose the file below first.", true);
+    return;
+  }
   startBtn.disabled = true;
   setStatus("connecting", "busy");
   try {
@@ -388,6 +650,7 @@ async function start() {
         await reportPlayhead();
         setInterval(reportPlayhead, 1000);
         book.play().catch(() => {});
+        setPlayIcon(true);
         setStatus("listening - just talk", "live");
         break;
 
@@ -398,15 +661,15 @@ async function start() {
         break;
 
       case "transcript.user.delta":
-        if (!partial) partial = line("you", "", "you partial");
-        partial.innerHTML = `<span class="who">you</span>${m.text || ""}`;
+        if (!partial) partial = turn("you", "", "you partial");
+        partial.textContent = m.text || "";
         pauseBook();
         break;
 
       case "transcript.user":
-        if (partial) partial.remove();
+        if (partial) partial.closest(".turn").remove();
         partial = null;
-        line("you", m.text || "");
+        turn("you", m.text || "");
         noteQuestion(m.text || "");
         pauseBook();
         setStatus("thinking", "busy");
@@ -427,7 +690,7 @@ async function start() {
         break;
 
       case "transcript.agent":
-        line("echoread", m.text || "");
+        turn("echoread", m.text || "");
         noteAnswer(m.text || "");
         break;
 
@@ -439,6 +702,7 @@ async function start() {
         if (justSeeked) justSeeked = false;
         else book.currentTime = Math.max(0, book.currentTime - 3);
         resumeBook();
+        setPlayIcon(true);
         setStatus("listening - just talk", "live");
         break;
 
@@ -450,11 +714,27 @@ async function start() {
   };
 }
 
+// ---------- wiring ----------
+
+const PLAY_PATH = "M0 0l12 7-12 7z";
+const PAUSE_PATH = "M0 0h4v14H0zM8 0h4v14H8z";
+function setPlayIcon(playing) {
+  el("playicon").firstElementChild.setAttribute("d", playing ? PAUSE_PATH : PLAY_PATH);
+  el("play").setAttribute("aria-label", playing ? "Pause the book" : "Play the book");
+}
+
 startBtn.addEventListener("click", start);
+
+el("play").addEventListener("click", () => {
+  if (book.paused) book.play().catch(() => {}); else book.pause();
+});
+book.addEventListener("play", () => setPlayIcon(true));
+book.addEventListener("pause", () => setPlayIcon(false));
+book.addEventListener("loadedmetadata", () => { paintSpine(); renderMarks(); });
 
 let lastRemembered = 0;
 book.addEventListener("timeupdate", () => {
-  el("clock").textContent = clockText(book.currentTime);
+  paintSpine();
   if (book.currentTime - lastRemembered > 5 || book.currentTime < lastRemembered) {
     lastRemembered = book.currentTime;
     rememberPosition();
@@ -463,18 +743,58 @@ book.addEventListener("timeupdate", () => {
 book.addEventListener("pause", rememberPosition);
 window.addEventListener("beforeunload", rememberPosition);
 
+// Spine as scrubber: press and drag anywhere along the axis.
+let dragging = false;
+el("spine").addEventListener("pointerdown", (e) => {
+  dragging = true;
+  el("spine").setPointerCapture(e.pointerId);
+  seekFromEvent(e);
+});
+el("spine").addEventListener("pointermove", (e) => { if (dragging) seekFromEvent(e); });
+el("spine").addEventListener("pointerup", () => { dragging = false; });
+el("spine").addEventListener("keydown", (e) => {
+  const step = e.key === "ArrowUp" || e.key === "ArrowLeft" ? -15
+             : e.key === "ArrowDown" || e.key === "ArrowRight" ? 15 : 0;
+  if (!step) return;
+  e.preventDefault();
+  book.currentTime = Math.max(0, Math.min(duration(), book.currentTime + step));
+  paintSpine();
+});
+
+el("librarybtn").addEventListener("click", () => {
+  const open = el("library").hidden;
+  el("library").hidden = !open;
+  el("librarybtn").setAttribute("aria-expanded", String(open));
+});
+
+el("addbtn").addEventListener("click", addByUrl);
+el("addurl").addEventListener("keydown", (e) => { if (e.key === "Enter") addByUrl(); });
+el("filepick").addEventListener("change", (e) => {
+  if (e.target.files[0]) addByFile(e.target.files[0]);
+  e.target.value = "";
+});
+["dragenter", "dragover"].forEach((t) =>
+  el("drop").addEventListener(t, (e) => { e.preventDefault(); el("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach((t) =>
+  el("drop").addEventListener(t, () => el("drop").classList.remove("over")));
+el("drop").addEventListener("drop", (e) => {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) addByFile(e.dataTransfer.files[0]);
+});
+
 el("export").addEventListener("click", exportNotes);
 el("importfile").addEventListener("change", (e) => {
   if (e.target.files[0]) importNotes(e.target.files[0]);
   e.target.value = "";
 });
 el("clearnotes").addEventListener("click", () => {
-  if (!confirm("Delete all " + notes.length + " notes? The export file is the only copy.")) return;
+  if (!confirm("Delete all " + notes.length + " notes for this book? The export file is the only copy.")) return;
   notes = [];
-  storageSet(NOTES_KEY, notes);
+  storageSet(notesKey(), notes);
   renderNotes();
 });
 
-notes = storageGet(NOTES_KEY, []);
+notes = storageGet(notesKey(), []);
 renderNotes();
-offerResume();
+paintSpine();
+loadShelf();

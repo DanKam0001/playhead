@@ -121,6 +121,12 @@ never updates, and it latches on forever. Hence calibrating before arming.
 | The seek rides the playhead heartbeat | The agent runs on AssemblyAI's servers and cannot touch the page. `go_to_topic` leaves a position in Redis; the browser's once-a-second report collects it. GETDEL, so a jump happens once. |
 | Spoiler cap does NOT apply to `go_to_topic` | The cap stops the agent *volunteering* what is ahead. Being asked to go there is consent. |
 | Notes live in the browser, not the server | No accounts, no auth, no storage to secure, 11 days before a deadline. The export file is how they move between machines; `/api/context` carries a digest of past *questions* (not answers) for continuity. |
+| A user's book lives in Redis, not SQLite | The lambda filesystem is read-only, and the request that builds an index is not the request that reads it. `RedisLibrary` answers `window`/`search`/`duration_hint`/`len`, so the tools never learn which kind of book they hold. |
+| Indexing is driven by polling, not a worker | A function is killed at 10 s; transcribing a book takes minutes. Each `GET /api/books/{id}` advances the job one bounded step (poll the transcript, or embed the next 100 chunks) and saves where it got to. The progress bar is a side effect of that, not a fake. |
+| Vectors sharded, float16, 100 per key | 100 x 768 x 2 B = 154 KB, ~205 KB base64 — comfortably under Upstash's 1 MB request cap, and one shard is one Gemini batch. `test_books.py` proves float16 still recovers the exact top hit. |
+| Times kept apart from text | A window lookup runs on every question and only needs `[[start,end],...]` (~20 B/chunk) plus the one text shard it lands in. Storing them together would drag a whole book across the wire per question. |
+| Uploads capped at 4 MB, links uncapped | The platform caps a request body at 4.5 MB. The browser checks size *before* sending so an audiobook gets a sentence, not an edge-level failure. AssemblyAI has no browser-safe upload token (checked 2026-09-19), so the key cannot move to the client. |
+| The spine is the UI | Everything here is anchored to a position in time, so the page is a time axis with marks on it, rather than a stack of cards. Structure carries the information. |
 | Streaming TTS kept but **measured no win** | 2.35 s vs 2.49 s; replies are ~250 chars so time-to-first-token dominates. Settled — don't redo this experiment. |
 
 ## Editing gotchas on this machine (cost real debugging time)
@@ -154,8 +160,9 @@ but changed nothing, producing a `NameError` that only surfaced mid-demo.
 
 | File | Role |
 |---|---|
-| `server/main.py` | FastAPI: `/api/session` (token mint), `/api/playhead`, `/api/context`, `/tools/passage_at_playhead`, `/tools/go_to_topic`, `/api/health` |
-| `server/store.py` | Shared state — playhead, pending seek, prior-session context. Upstash Redis in prod, memory locally |
+| `server/main.py` | FastAPI: `/api/session` (token mint), `/api/playhead`, `/api/context`, `/api/books` (+ `/upload`, `/{id}`), `/tools/passage_at_playhead`, `/tools/go_to_topic`, `/api/health` |
+| `server/books.py` | Bring-your-own-book: AssemblyAI transcription, chunking, embedding, and `RedisLibrary` (same surface as `Library`) |
+| `server/store.py` | Shared state — playhead, pending seek, prior-session context, current book, and a general kv surface for book indexes. Upstash Redis in prod, memory locally |
 | `server/agent.json` | The stored agent: system prompt + the one HTTP tool |
 | `scripts/create_agent.py` | Publish/update the agent. Tool URL host must resolve, so deploy first |
 | `web/index.html`, `web/app.js` | Browser client (source of truth — copy to `public/`) |
@@ -297,8 +304,36 @@ keep it.
 - (Browser) `createScriptProcessor` accepts only powers of two; `1200` threw
   `IndexSizeError` and read as "microphone blocked".
 
+## Bring your own audiobook (built 2026-09-19)
+
+The shipped Einstein chapter is now a demo, not the whole product. Library panel
+in the page: paste a direct audio link, or drop a file under 4 MB.
+
+**Verified end to end against a real LibriVox URL** (`relativity_10-12`,
+deliberately a *different* section from the shipped 07-09, so a wrong index is
+obvious): transcribed, 14 chunks, ready in ~2.5 min; `passage_at_playhead` at
+10:00 returned chapter 11 material that is **not in the shipped index**;
+`go_to_topic("the Lorentz transformation")` resolved to 7:04; the spoiler cap
+correctly returned no lookback at t=120.
+
+`test_books.py` covers the Redis path with **no keys and no network** — it runs
+the real `RedisStore` against a stand-in for Upstash REST. It is the first
+automated test the web app has had. Run it after touching `store.py` or
+`books.py`.
+
+Notes and the resume point are now **per book** (`echoread:notes:<book id>`).
+Questions about one book were noise against another.
+
 ## Open and untested (as of 2026-09-19)
 
+- **The bring-your-own-book work is NOT DEPLOYED.** It was built, run and
+  verified locally on 2026-09-19, but the production deploy was blocked by a
+  permission prompt and never ran. `echoread-alpha.vercel.app` is still serving
+  the previous build. Nothing about the feature is live until someone runs the
+  deploy in the Deployment section and re-checks `/api/health`. The Upstash
+  round trip is covered by `test_books.py` against a stand-in, **not** against
+  real Upstash — confirm a book reaches `ready` on the live site before filming
+  it.
 - **Speaker mode (no headphones) has never been tested.** The old "headphones
   are non-negotiable" line is a *desktop-era* constraint that got repeated by
   mistake: the browser cancels its own output (the book and the reply both play

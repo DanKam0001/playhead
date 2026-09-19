@@ -13,3 +13,4 @@ make_demo_audiobook.py
 build_index.py
 check_keys.py
 data/*.transcript.json
+test_books.py

@@ -12,6 +12,7 @@ content to search for, so similarity search over the book returns noise.
 Position answers it exactly.
 """
 import os
+import re
 import time
 from pathlib import Path
 from typing import Dict, Optional
@@ -21,13 +22,14 @@ import urllib.request
 import json
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from echoread.library import Library
 
+from . import books
 from .store import build_store
 
 load_dotenv()
@@ -46,11 +48,28 @@ library = Library(ROOT / "data" / f"{BOOK}.db")
 playheads = build_store()
 
 
+def library_for(session_id: Optional[str]):
+    """The book this listener is on, as something with Library's methods.
+
+    The shipped book is a SQLite file in the repo; anything anyone added is in
+    Redis. Both answer window() and search(), so neither tool below has to know
+    which one it is holding.
+    """
+    book_id = playheads.get_book(session_id)
+    if not book_id or book_id == BOOK:
+        return library, BOOK
+    rec = books.load(playheads, book_id)
+    if not rec or rec.status != "ready":
+        return library, BOOK
+    return books.RedisLibrary(playheads, rec), rec.title
+
+
 # ---------- browser -> backend ----------
 
 class Playhead(BaseModel):
     session_id: str
     seconds: float
+    book: Optional[str] = None
 
 
 @app.post("/api/playhead")
@@ -62,6 +81,10 @@ def report_playhead(p: Playhead):
     stays stateless from the agent's point of view.
     """
     playheads.set(p.session_id, max(0.0, p.seconds))
+    # Which book, on the same seam and for the same reason as the position:
+    # the browser knows, and the tool call from AssemblyAI cannot see it.
+    if p.book:
+        playheads.set_book(p.session_id, p.book)
     # The same heartbeat carries jumps back. The agent cannot move the audio
     # itself -- it runs on AssemblyAI's servers -- so go_to_topic leaves a
     # pending position here and the browser collects it within the second.
@@ -137,7 +160,8 @@ def passage_at_playhead(call: ToolCall):
         return {"ok": False,
                 "message": "I can't tell where you are in the book yet - "
                            "is it playing?"}
-    near = library.window(t)
+    lib, _title = library_for(call.session_id)
+    near = lib.window(t)
     if not near:
         return {"ok": False,
                 "message": f"There's no indexed text around {int(t)//60}:{int(t)%60:02d}."}
@@ -152,7 +176,7 @@ def passage_at_playhead(call: ToolCall):
                   "Only mention this if it is relevant to what they just asked."]
 
     if call.search:
-        far = _search_earlier(call.search, t, exclude={c.id for c in near})
+        far = _search_earlier(lib, call.search, t, exclude={c.id for c in near})
         if far:
             parts += ["", f"Earlier in the book, on '{call.search}':",
                       " ".join(c.text for c in far)]
@@ -181,7 +205,8 @@ def go_to_topic(call: TopicCall):
         return {"ok": False,
                 "message": "I can't look up topics right now - say roughly where "
                            "you want to go instead."}
-    hits = library.search(vec, k=1)
+    lib, _title = library_for(call.session_id)
+    hits = lib.search(vec, k=1)
     if not hits:
         return {"ok": False,
                 "message": f"I couldn't find anything about {call.topic} in this book."}
@@ -211,19 +236,131 @@ def _embed(query: str):
         return None
 
 
-def _search_earlier(query: str, before_s: float, exclude) -> list:
+def _search_earlier(lib, query: str, before_s: float, exclude) -> list:
     """Semantic lookback, capped at the playhead so it cannot spoil the book."""
+    vec = _embed(query)
+    if vec is None:
+        return []
     try:
-        from echoread.brain import GeminiEmbedder
-        key = os.getenv("GEMINI_API_KEY", "")
-        if not key:
-            return []
-        vec = GeminiEmbedder(key)([query], "query")[0]
-        hits = library.search(vec, k=5, before_s=before_s)
+        hits = lib.search(vec, k=5, before_s=before_s)
         return [c for c in hits if c.id not in exclude][:2]
     except Exception as exc:
         print(f"[tool] lookback skipped: {exc}")
         return []
+
+
+# ---------- bring your own audiobook ----------
+
+class NewBook(BaseModel):
+    title: str = ""
+    audio_url: str
+
+
+def _embedder():
+    """The Gemini embedder, or None if this deployment has no key."""
+    try:
+        from echoread.brain import GeminiEmbedder
+        key = os.getenv("GEMINI_API_KEY", "")
+        return GeminiEmbedder(key) if key else None
+    except Exception as exc:
+        print(f"[books] embedder unavailable: {exc}")
+        return None
+
+
+def _builtin_card() -> dict:
+    return {"id": BOOK, "title": "Relativity: The Special and General Theory",
+            "audio_url": f"/audio/{BOOK}.mp3", "status": "ready", "error": "",
+            "progress": 100, "chunks": len(library),
+            "duration": round(library.duration_hint(), 1), "builtin": True}
+
+
+@app.get("/api/books")
+def list_books():
+    """The shelf: the shipped book first, then whatever has been added."""
+    return {"books": [_builtin_card()] + books.shelf(playheads)}
+
+
+@app.post("/api/books")
+def add_book(new: NewBook):
+    """Start indexing a book from a URL.
+
+    Returns as soon as the transcription job is queued. The browser then polls
+    GET /api/books/{id}, and each poll advances the work by one step -- there
+    is no worker here, and a request that waited for a whole audiobook would be
+    killed by the platform long before it finished.
+    """
+    if not AAI_KEY:
+        raise HTTPException(500, "ASSEMBLYAI_API_KEY is not set on this deployment.")
+    url = new.audio_url.strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "That needs to be a direct https link to an audio file.")
+    try:
+        rec = books.create(playheads, new.title or _title_from_url(url), url, AAI_KEY)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode()[:200]
+        raise HTTPException(400, f"AssemblyAI could not take that link: {detail}")
+    return rec.public()
+
+
+@app.post("/api/books/upload")
+async def upload_book(request: Request):
+    """Add a book from a file on the listener's machine.
+
+    The audio goes straight to AssemblyAI and is never stored here. The
+    platform caps a request body at 4.5 MB, so this path is for a chapter or
+    an episode; the page checks the size first and steers longer books to the
+    URL form rather than letting them fail at the edge.
+    """
+    if not AAI_KEY:
+        raise HTTPException(500, "ASSEMBLYAI_API_KEY is not set on this deployment.")
+    title = request.headers.get("x-book-title", "") or "Uploaded book"
+    raw = await request.body()
+    if not raw:
+        raise HTTPException(400, "No audio arrived.")
+    if len(raw) > 4_400_000:
+        raise HTTPException(413, "That file is too big to upload here - paste a link to it instead.")
+    try:
+        url = books.upload_bytes(raw, AAI_KEY)
+        rec = books.create(playheads, title, url, AAI_KEY)
+    except urllib.error.HTTPError as e:
+        raise HTTPException(400, f"Upload failed: {e.read().decode()[:200]}")
+    # The browser plays its own local copy; this URL is AssemblyAI-only.
+    out = rec.public()
+    out["audio_url"] = ""
+    return out
+
+
+@app.get("/api/books/{book_id}")
+def book_status(book_id: str):
+    """Status, and one slice of work.
+
+    Polling is the scheduler. Each call checks the transcript or embeds the
+    next hundred chunks, so progress only moves while someone is watching --
+    which is exactly when it matters.
+    """
+    if book_id == BOOK:
+        return _builtin_card()
+    rec = books.load(playheads, book_id)
+    if not rec:
+        raise HTTPException(404, "No such book.")
+    rec = books.advance(playheads, rec, AAI_KEY, _embedder())
+    return rec.public()
+
+
+def _title_from_url(url: str) -> str:
+    """A readable name out of a file name.
+
+    Archive.org and LibriVox names carry encoding junk ('..._64kb.mp3') that
+    would otherwise end up on screen as the title of someone's book.
+    """
+    name = url.rstrip("/").split("/")[-1].split("?")[0]
+    name = re.sub(r"\.(mp3|m4a|m4b|wav|ogg|flac|aac|webm)$", "", name, flags=re.I)
+    # No \b before the digits: an underscore is a word character, so "_64kb"
+    # has no boundary to anchor to and the junk survives.
+    name = re.sub(r"[_\- ]*\d{1,3} ?k(?:b|bps)?(?![a-z0-9])", "", name, flags=re.I)
+    name = re.sub(r"[_-]+", " ", name).strip()
+    words = [w if (w.isupper() and len(w) > 1) else w.capitalize() for w in name.split()]
+    return " ".join(words) or "Untitled book"
 
 
 @app.get("/api/health")

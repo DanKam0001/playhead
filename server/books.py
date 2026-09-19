@@ -1,0 +1,350 @@
+"""Bring your own audiobook: transcribe it, index it, serve it like the shipped one.
+
+The built-in book is a SQLite file baked into the repo. A book someone adds at
+runtime cannot be: the filesystem on a lambda is read-only, and the request that
+builds the index is not the request that later reads it. So a user book lives in
+the same Redis the playhead uses, behind a class with the same surface as
+`echoread.library.Library` -- `window`, `search`, `duration_hint`, `len` -- so
+the tools in main.py never learn which kind of book they are holding.
+
+The pipeline is deliberately resumable, one bounded slice of work per HTTP
+request:
+
+    transcribing -> indexing -> ready
+
+Nothing here may block. A serverless function is killed at ten seconds, and
+transcribing an audiobook takes minutes, so `advance()` does a little work,
+writes down where it got to, and returns. The browser polls; each poll pushes
+the job one step further. That also gives the page a real progress number
+instead of a spinner that means nothing.
+"""
+import base64
+import json
+import re
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from typing import List, Optional
+
+import numpy as np
+
+from echoread.library import Chunk, WINDOW_AFTER_S, WINDOW_BEFORE_S
+
+AAI_BASE = "https://api.assemblyai.com/v2"
+
+# Gemini caps an embedding batch at 100, and one batch is about a second of
+# work -- a safe amount to do inside a single request.
+SLICE = 100
+# 768-d, matching echoread.brain.EMBED_DIM and the shipped .npy.
+DIM = 768
+# Stored as float16. Cosine similarity over normalised vectors does not care
+# about the last few bits of mantissa, and it halves what crosses the wire.
+VEC_DTYPE = "float16"
+
+BOOK_TTL = 30 * 24 * 3600
+# An upper bound on a single book, so one enormous file cannot exhaust the
+# store. ~1800 chunks is a ten-hour book.
+MAX_CHUNKS = 2000
+
+
+def slug(title: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", (title or "book").lower()).strip("-")
+    return (s[:40] or "book") + "-" + format(int(time.time() * 1000) % 0xFFFFFF, "x")
+
+
+# ---------- AssemblyAI ----------
+
+def _aai(path: str, key: str, payload: Optional[dict] = None, timeout: int = 15):
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(
+        f"{AAI_BASE}{path}",
+        data=data,
+        headers={"Authorization": key,
+                 **({"Content-Type": "application/json"} if data else {})},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
+
+
+def upload_bytes(raw: bytes, key: str) -> str:
+    """Hand raw audio to AssemblyAI and get back a URL only they can read.
+
+    Only reachable for small files: the platform caps a request body at 4.5 MB,
+    which is a chapter or a podcast episode, not a novel. Longer books come in
+    by URL instead, which has no such ceiling.
+    """
+    req = urllib.request.Request(
+        f"{AAI_BASE}/upload", data=raw,
+        headers={"Authorization": key, "Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)["upload_url"]
+
+
+def start_transcription(audio_url: str, key: str) -> str:
+    """Queue the job and return immediately. Polling happens in advance()."""
+    # speech_models is left at its default (universal-3-5-pro, falling back to
+    # universal-2). Pinning it here would silently break when the flagship
+    # model is renamed, which has already happened once on this project.
+    body = {"audio_url": audio_url, "punctuate": True, "format_text": True}
+    return _aai("/transcript", key, body)["id"]
+
+
+# ---------- the record ----------
+
+@dataclass
+class BookRecord:
+    id: str
+    title: str
+    audio_url: str
+    transcript_id: str = ""
+    status: str = "transcribing"       # transcribing | indexing | ready | failed
+    error: str = ""
+    n_chunks: int = 0
+    embedded: int = 0
+    duration: float = 0.0
+    builtin: bool = False
+    created: float = 0.0
+
+    @property
+    def progress(self) -> int:
+        """0-100. Transcription is the long pole, so it owns most of the bar."""
+        if self.status == "ready":
+            return 100
+        if self.status == "transcribing":
+            return 10
+        if self.status == "indexing" and self.n_chunks:
+            return 40 + int(55 * self.embedded / self.n_chunks)
+        return 0
+
+    def public(self) -> dict:
+        return {"id": self.id, "title": self.title, "audio_url": self.audio_url,
+                "status": self.status, "error": self.error, "progress": self.progress,
+                "chunks": self.n_chunks, "duration": round(self.duration, 1),
+                "builtin": self.builtin}
+
+
+def _key(book_id: str, part: str = "meta") -> str:
+    return f"echoread:book:{book_id}:{part}"
+
+
+def load(store, book_id: str) -> Optional[BookRecord]:
+    raw = store.kv_get(_key(book_id))
+    if not raw:
+        return None
+    try:
+        return BookRecord(**json.loads(raw))
+    except Exception:
+        return None
+
+
+def save(store, rec: BookRecord) -> None:
+    store.kv_set(_key(rec.id), json.dumps(rec.__dict__), ttl=BOOK_TTL)
+
+
+def create(store, title: str, audio_url: str, aai_key: str) -> BookRecord:
+    rec = BookRecord(id=slug(title), title=title.strip() or "Untitled book",
+                     audio_url=audio_url, created=time.time())
+    rec.transcript_id = start_transcription(audio_url, aai_key)
+    save(store, rec)
+    store.kv_push("echoread:books", rec.id)
+    return rec
+
+
+def shelf(store) -> List[dict]:
+    """Every book anyone has added, newest first. One shared shelf is the
+    right scope here: no accounts, and a book added is a book worth sharing."""
+    out = []
+    for book_id in store.kv_list("echoread:books", 30):
+        rec = load(store, book_id)
+        if rec:
+            out.append(rec.public())
+    return out
+
+
+# ---------- the pipeline ----------
+
+def advance(store, rec: BookRecord, aai_key: str, embedder) -> BookRecord:
+    """Push one book one step. Safe to call repeatedly; safe to call on a
+    finished book. Every branch returns well inside a request timeout."""
+    if rec.status in ("ready", "failed"):
+        return rec
+    try:
+        if rec.status == "transcribing":
+            return _poll_transcript(store, rec, aai_key)
+        if rec.status == "indexing":
+            return _embed_slice(store, rec, embedder)
+    except urllib.error.HTTPError as e:
+        return _fail(store, rec, f"{e.code}: {e.read().decode()[:160]}")
+    except Exception as exc:
+        return _fail(store, rec, str(exc)[:200])
+    return rec
+
+
+def _fail(store, rec: BookRecord, message: str) -> BookRecord:
+    rec.status, rec.error = "failed", message
+    save(store, rec)
+    print(f"[books] {rec.id} failed: {message}")
+    return rec
+
+
+def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
+    t = _aai(f"/transcript/{rec.transcript_id}", aai_key)
+    status = t.get("status")
+    if status == "error":
+        return _fail(store, rec, t.get("error", "transcription failed"))
+    if status != "completed":
+        return rec
+
+    paras = _aai(f"/transcript/{rec.transcript_id}/paragraphs", aai_key)
+    payload = {"paragraphs": paras.get("paragraphs", []),
+               "text": t.get("text", ""),
+               "audio_duration": t.get("audio_duration", 0)}
+    chunks = _chunks_from(payload)
+    if not chunks:
+        return _fail(store, rec, "the transcript came back empty - is there speech in it?")
+
+    chunks = chunks[:MAX_CHUNKS]
+    # Times are read on every single question, so they are kept apart from the
+    # text: a window lookup then costs one small fetch instead of pulling the
+    # whole book across the wire.
+    store.kv_set(_key(rec.id, "times"),
+                 json.dumps([[round(c.start_s, 2), round(c.end_s, 2)] for c in chunks]),
+                 ttl=BOOK_TTL)
+    for i in range(0, len(chunks), SLICE):
+        store.kv_set(_key(rec.id, f"text:{i // SLICE}"),
+                     json.dumps([c.text for c in chunks[i:i + SLICE]]), ttl=BOOK_TTL)
+
+    rec.n_chunks = len(chunks)
+    rec.duration = float(t.get("audio_duration") or (chunks[-1].end_s if chunks else 0))
+    rec.status, rec.embedded = "indexing", 0
+    save(store, rec)
+    print(f"[books] {rec.id} transcribed: {rec.n_chunks} chunks")
+    return rec
+
+
+def _chunks_from(payload: dict) -> List[Chunk]:
+    from echoread.library import Library
+    return Library.chunks_from_transcript(payload)
+
+
+def _embed_slice(store, rec: BookRecord, embedder) -> BookRecord:
+    """Embed the next batch and write it as its own shard.
+
+    One slice per request is the whole trick: a ten-hour book is eighteen
+    Gemini calls, which would blow any request timeout done in one go, but is
+    eighteen quick polls when spread out -- and the browser gets a real
+    percentage out of it.
+    """
+    if embedder is None:
+        return _fail(store, rec, "embeddings are unavailable on this deployment")
+    n = rec.embedded // SLICE
+    texts = json.loads(store.kv_get(_key(rec.id, f"text:{n}")) or "[]")
+    if not texts:
+        rec.status = "ready"
+        save(store, rec)
+        return rec
+
+    vecs = embedder(texts, "document").astype("float32")
+    # Normalised at write time so a query is a plain dot product later.
+    vecs /= np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-9
+    store.kv_set(_key(rec.id, f"vecs:{n}"),
+                 base64.b64encode(vecs.astype(VEC_DTYPE).tobytes()).decode("ascii"),
+                 ttl=BOOK_TTL)
+
+    rec.embedded = min(rec.embedded + len(texts), rec.n_chunks)
+    if rec.embedded >= rec.n_chunks:
+        rec.status = "ready"
+        print(f"[books] {rec.id} ready: {rec.n_chunks} chunks")
+    save(store, rec)
+    return rec
+
+
+# ---------- reading it back ----------
+
+class RedisLibrary:
+    """A book held in Redis, with the same methods main.py calls on Library.
+
+    Reads are lazy and shard-scoped. Answering "what did that mean?" needs the
+    times plus one text shard; only a named-topic search pays for the vectors.
+    """
+
+    def __init__(self, store, rec: BookRecord):
+        self._store = store
+        self._rec = rec
+        self._times: Optional[List[List[float]]] = None
+        self._vectors: Optional[np.ndarray] = None
+        self._texts: dict = {}
+
+    # -- lazily loaded pieces --
+
+    def _load_times(self) -> List[List[float]]:
+        if self._times is None:
+            self._times = json.loads(self._store.kv_get(_key(self._rec.id, "times")) or "[]")
+        return self._times
+
+    def _text(self, chunk_id: int) -> str:
+        n = chunk_id // SLICE
+        if n not in self._texts:
+            self._texts[n] = json.loads(
+                self._store.kv_get(_key(self._rec.id, f"text:{n}")) or "[]")
+        shard = self._texts[n]
+        i = chunk_id % SLICE
+        return shard[i] if i < len(shard) else ""
+
+    def _load_vectors(self) -> Optional[np.ndarray]:
+        if self._vectors is None:
+            blocks = []
+            for n in range((self._rec.n_chunks + SLICE - 1) // SLICE):
+                raw = self._store.kv_get(_key(self._rec.id, f"vecs:{n}"))
+                if not raw:
+                    break
+                blocks.append(np.frombuffer(base64.b64decode(raw), dtype=VEC_DTYPE)
+                              .reshape(-1, DIM).astype("float32"))
+            self._vectors = np.vstack(blocks) if blocks else np.zeros((0, DIM), "float32")
+        return self._vectors
+
+    def _chunk(self, i: int) -> Chunk:
+        start, end = self._load_times()[i]
+        return Chunk(i, start, end, self._text(i))
+
+    # -- the Library surface --
+
+    def window(self, timestamp: float,
+               before: float = WINDOW_BEFORE_S,
+               after: float = WINDOW_AFTER_S) -> List[Chunk]:
+        lo, hi = timestamp - before, timestamp + after
+        ids = [i for i, (s, e) in enumerate(self._load_times()) if e >= lo and s <= hi]
+        return [self._chunk(i) for i in ids]
+
+    def search(self, query_vec: np.ndarray, k: int = 4,
+               before_s: Optional[float] = None) -> List[Chunk]:
+        vecs = self._load_vectors()
+        if vecs is None or not len(vecs):
+            return []
+        q = query_vec.astype("float32").ravel()
+        q /= np.linalg.norm(q) + 1e-9
+        scores = vecs @ q
+
+        if before_s is not None:
+            # The spoiler cap, same rule as the shipped book: nothing from
+            # further along than the listener has actually reached.
+            times = self._load_times()
+            mask = np.array([times[i][0] <= before_s for i in range(len(scores))])
+            scores = np.where(mask, scores, -np.inf)
+
+        k = min(k, int(np.isfinite(scores).sum()))
+        if k <= 0:
+            return []
+        top = np.argpartition(-scores, k - 1)[:k]
+        top = top[np.argsort(-scores[top])]
+        return [self._chunk(int(i)) for i in top]
+
+    def duration_hint(self) -> float:
+        if self._rec.duration:
+            return self._rec.duration
+        times = self._load_times()
+        return float(times[-1][1]) if times else 0.0
+
+    def __len__(self) -> int:
+        return self._rec.n_chunks

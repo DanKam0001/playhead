@@ -44,6 +44,38 @@ Two rules fall out of it:
 
 `compare_rag.py` runs the two approaches side by side on the same questions.
 
+## Bring your own audiobook
+
+The shipped Einstein chapter is a demo, not the product. Paste a direct link to
+any audio file — or drop a short one in — and EchoRead builds it the same index
+it uses for its own book:
+
+```
+your link -> AssemblyAI transcription -> chunks cut at the reader's own pauses
+          -> Gemini embeddings, 768-d, stored against each chunk's timestamp
+          -> both tools work on it, spoiler cap included
+```
+
+Anything on [LibriVox](https://librivox.org) or archive.org works: open a chapter
+and copy the direct MP3 link. A 17-minute chapter takes about two and a half
+minutes to transcribe and index.
+
+Two details worth knowing:
+
+- **Indexing is driven by polling, not a worker.** A serverless function is
+  killed at ten seconds and transcribing a book takes minutes, so each poll from
+  the browser advances the job one bounded step — check the transcript, or embed
+  the next hundred chunks — and writes down where it got to. That is also where
+  the progress percentage comes from, instead of a spinner that means nothing.
+- **Uploads stop at 4 MB, links do not.** The platform caps a request body, so
+  the upload path is for a chapter or an episode. The page checks the size before
+  sending and points you at the link form, rather than failing at the edge.
+
+A user book is held in Redis rather than SQLite — the filesystem on a lambda is
+read-only, and the request that builds an index is not the request that reads it.
+`RedisLibrary` exposes the same `window` / `search` surface as the shipped
+`Library`, so neither tool ever learns which kind of book it is holding.
+
 ## Architecture
 
 ```
@@ -115,11 +147,13 @@ servers, so for local development use a tunnel (ngrok, cloudflared), not
 localhost. `GET /api/health` reports whether the agent is configured and which
 store is in use.
 
-To index a different book:
+To index a different book, use the Library panel in the page — or, to bake one
+into the repo the way the shipped book is:
 
 ```bash
-python build_index.py path/to/book.mp3 --name mybook    # transcribe + chunk + embed
-python compare_rag.py                                   # position-first vs naive RAG
+python build_index.py path/to/book.mp3     # transcribe + chunk + embed to data/
+python compare_rag.py                      # position-first vs naive RAG
+python test_books.py                       # the user-book path, no keys required
 ```
 
 ## Layout
@@ -127,11 +161,14 @@ python compare_rag.py                                   # position-first vs naiv
 | Path | What it is |
 |---|---|
 | `web/`, `public/` | The browser client. **`public/` is what deploys** — copy `web/` into it |
-| `server/main.py` | FastAPI: session tokens, playhead, the HTTP tool |
-| `server/agent.json` | The stored agent: system prompt + the one tool |
+| `server/main.py` | FastAPI: session tokens, playhead, the books API, the HTTP tools |
+| `server/books.py` | Bring-your-own-book: transcribe → chunk → embed → `RedisLibrary` |
+| `server/store.py` | Shared state: playhead, pending seek, prior context, book indexes |
+| `server/agent.json` | The stored agent: system prompt + the two tools |
 | `echoread/library.py` | The retrieval core — time window, capped semantic search |
-| `build_index.py` | AssemblyAI transcription → timestamped chunks → embeddings |
+| `build_index.py` | Offline version of the same pipeline, for the shipped book |
 | `compare_rag.py` | Side-by-side: naive vector RAG vs position-first |
+| `test_books.py` | Runs the user-book path against a stand-in Upstash. No keys needed |
 
 ## How we got here
 
