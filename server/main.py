@@ -65,7 +65,12 @@ AGENT_ID = _setting("AGENT_ID", "")
 # ~4.5 MB at the edge, before any of this runs. Raising MAX_UPLOAD_MB past that
 # only helps somewhere without that cap.
 MAX_UPLOAD_MB = float(_setting("MAX_UPLOAD_MB", "4"))
-MAX_SOURCE_MB = float(_setting("MAX_SOURCE_MB", "150"))
+# 0 means no ceiling of ours. Kept as a setting rather than deleted so a
+# deployment that is not sitting on someone's personal API key can put one
+# back without a code change.
+MAX_SOURCE_MB = float(_setting("MAX_SOURCE_MB", "0"))
+# Books added per hour from one address; 0 disables the check entirely.
+RATE_PER_HOUR = int(_setting("RATE_PER_HOUR", "0"))
 
 app = FastAPI(title="Playhead")
 library = Library(ROOT / "data" / f"{BOOK}.db")
@@ -303,24 +308,23 @@ def _builtin_card() -> dict:
 # own shelf, not pre-built: it costs nothing until someone wants one, and
 # watching it index is the clearest demonstration of what this does.
 SUGGESTED = [
-    {"title": "Sun Tzu - The Art of War, ch. 1-2",
-     "audio_url": "https://archive.org/download/art_of_war_librivox/art_of_war_01-02_sun_tzu_64kb.mp3",
-     "note": "Laying plans, and waging war"},
-    {"title": "Marcus Aurelius - Meditations, book 2",
-     "audio_url": "https://archive.org/download/themeditationsofmarcusaurelius_1801_librivox/meditationsofmarcusaurelius_02_aurelius_64kb.mp3",
-     "note": "Short, dense, endlessly quotable"},
+    {"title": "Babbage - Of the Analytical Engine",
+     "audio_url": "https://archive.org/download/life_of_a_philosopher_1909_librivox/lifeofaphilosopher_09_babbage_64kb.mp3",
+     "note": "The first computer, described by the man who designed it"},
+    {"title": "Russell - Introduction to Mathematical Philosophy, ch. 1",
+     "audio_url": "https://archive.org/download/mathematicalphilosophy_1508_librivox/mathematicalphilosophy_01_russell_64kb.mp3",
+     "note": "What a number actually is. Sets, logic, foundations"},
+    {"title": "Poincare - Science and Hypothesis, ch. 1",
+     "audio_url": "https://archive.org/download/science_and_hypothesis_librivox/scienceandhypothesis_01_poincare_64kb.mp3",
+     "note": "On the nature of mathematical reasoning - induction and proof"},
+    {"title": "Abbott - Flatland, ch. 1-3",
+     "audio_url": "https://archive.org/download/flatland3_2603_librivox/flatland_01_abbott_64kb.mp3",
+     "note": "Dimensions, from the inside. Short"},
     {"title": "Einstein - Relativity, ch. 10-12",
      "audio_url": "https://archive.org/download/relativity_librivox/relativity_10-12_einstein_64kb.mp3",
-     "note": "Carries on from the shipped chapter"},
-    {"title": "Aesop - Fables, volume one",
-     "audio_url": "https://archive.org/download/aesop_fables_volume_one_librivox/fables_01_00_aesop_64kb.mp3",
-     "note": "Many small stories, one file"},
+     "note": "The Lorentz transformation. Carries on from the shipped chapter"},
 ]
 
-# One person adding books is a handful an hour -- a judge trying every
-# suggestion and two of their own is six. Anything well past this is someone
-# running up a transcription bill on a key that is not theirs.
-RATE_PER_HOUR = 12
 
 
 def _client_id(request: Request) -> str:
@@ -337,7 +341,13 @@ def _rate_limit(request: Request) -> None:
     the thing that needs protecting is the transcription spend behind it.
     Called only once a link has passed validation: a rejected paste costs us
     one HEAD request, and charging someone's quota for a typo is just rude.
+
+    RATE_PER_HOUR = 0 turns this off. The owner of the key gets to decide how
+    much of it to leave lying in the road; the SSRF and content-type guards in
+    books.py are not optional in the same way and stay on regardless.
     """
+    if RATE_PER_HOUR <= 0:
+        return
     ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or "unknown"
     try:
         n = playheads.kv_incr(f"playhead:rate:{ip}", 3600)

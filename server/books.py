@@ -20,6 +20,7 @@ instead of a spinner that means nothing.
 """
 import base64
 import json
+import os
 import re
 import time
 import urllib.error
@@ -44,9 +45,10 @@ DIM = 768
 VEC_DTYPE = "float16"
 
 BOOK_TTL = 30 * 24 * 3600
-# An upper bound on a single book, so one enormous file cannot exhaust the
-# store. ~1800 chunks is a ten-hour book.
-MAX_CHUNKS = 2000
+# An upper bound on a single book, in chunks (~1800 is a ten-hour book).
+# 0 means no ceiling. Left as a setting rather than deleted because it is the
+# only thing standing between one enormous file and the whole store.
+MAX_CHUNKS = int(os.getenv("PLAYHEAD_MAX_CHUNKS", "0") or 0)
 
 
 # A book has to be plausibly a book: long enough to be worth indexing, small
@@ -137,7 +139,7 @@ def check_source(url: str, max_bytes: int = MAX_SOURCE_BYTES) -> dict:
                               f"which is not an audio file")
         return {"content_type": "", "bytes": 0}
 
-    if length and length > max_bytes:
+    if max_bytes and length and length > max_bytes:
         raise RejectedURL(
             f"that file is {length / 1e6:.0f} MB, and the ceiling here is "
             f"{max_bytes // 1_000_000} MB. Try a single chapter.")
@@ -334,7 +336,8 @@ def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
                      f"({density:.0f} characters a minute). Playhead indexes "
                      f"narration - music or ambience gives it nothing to answer from.")
 
-    chunks = chunks[:MAX_CHUNKS]
+    if MAX_CHUNKS:
+        chunks = chunks[:MAX_CHUNKS]
     # Times are read on every single question, so they are kept apart from the
     # text: a window lookup then costs one small fetch instead of pulling the
     # whole book across the wire.
@@ -423,10 +426,18 @@ class RedisLibrary:
         return shard[i] if i < len(shard) else ""
 
     def _load_vectors(self) -> Optional[np.ndarray]:
+        """Every shard in one round trip.
+
+        A long book is many shards, and fetching them one at a time is that
+        many sequential network calls inside a function the platform kills at
+        ten seconds. This is the only path that needs the whole index -- the
+        window lookup, which runs on every question, never comes here.
+        """
         if self._vectors is None:
+            n_shards = (self._rec.n_chunks + SLICE - 1) // SLICE
+            keys = [_key(self._rec.id, f"vecs:{n}") for n in range(n_shards)]
             blocks = []
-            for n in range((self._rec.n_chunks + SLICE - 1) // SLICE):
-                raw = self._store.kv_get(_key(self._rec.id, f"vecs:{n}"))
+            for raw in self._store.kv_mget(keys):
                 if not raw:
                     break
                 blocks.append(np.frombuffer(base64.b64decode(raw), dtype=VEC_DTYPE)

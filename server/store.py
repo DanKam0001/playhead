@@ -53,6 +53,7 @@ class PlayheadStore(Protocol):
     def kv_push(self, key: str, value: str) -> None: ...
     def kv_list(self, key: str, n: int = 50) -> list: ...
     def kv_incr(self, key: str, ttl: int) -> int: ...
+    def kv_mget(self, keys: list) -> list: ...
 
 
 class MemoryStore:
@@ -131,6 +132,9 @@ class MemoryStore:
     def kv_incr(self, key: str, ttl: int) -> int:
         self._counts[key] = self._counts.get(key, 0) + 1
         return self._counts[key]
+
+    def kv_mget(self, keys: list) -> list:
+        return [self._kv.get(k) for k in keys]
 
     @property
     def kind(self) -> str:
@@ -284,6 +288,18 @@ class RedisStore:
         if n == 1:
             self._post("expire", key, str(ttl))
         return n
+
+    def kv_mget(self, keys: list) -> list:
+        """Every key in one round trip.
+
+        A ten-hour book is eighteen index shards. Fetched one at a time that is
+        eighteen sequential network calls inside a function that is killed at
+        ten seconds; as one MGET it is one.
+        """
+        if not keys:
+            return []
+        raw = self._post("mget", *keys, timeout=20)
+        return list(raw or [None] * len(keys))
 
     @property
     def kind(self) -> str:

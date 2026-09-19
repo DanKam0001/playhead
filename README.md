@@ -81,24 +81,68 @@ read-only, and the request that builds an index is not the request that reads it
 
 ## Architecture
 
-```
-Browser                    AssemblyAI                   This backend
-───────                    ──────────                   ────────────
-mic ──24 kHz PCM16──▶  Voice Agent API
-                       (STT + LLM + TTS,
-                        one websocket)
-                            │
-                            │ HTTP tool call (server-to-server)
-                            ▼
-                                                  /tools/passage_at_playhead
-                                                  reads the playhead from Redis,
-                                                  returns the passage window
-                            │
-◀──── reply audio ──────────┘
-   playhead POSTed once a second ───────────────▶ /api/playhead
+Where each piece runs, and why the split is shaped this way:
+
+```mermaid
+flowchart TB
+    subgraph browser["🖥️  BROWSER — client side"]
+        direction TB
+        book["&lt;audio&gt; — the book<br/>play · duck to 12% · seek"]
+        mic["mic capture<br/>echoCancellation: true<br/>PCM16 @ 24 kHz"]
+        ui["the spine · transcript · library"]
+        store[("localStorage<br/>notes · position · client id")]
+    end
+
+    subgraph aai["☁️  ASSEMBLYAI — their servers"]
+        direction TB
+        agent["Voice Agent<br/>STT + LLM + TTS<br/>over one websocket"]
+        trans["async transcription<br/>(new books)"]
+    end
+
+    subgraph back["⚙️  PLAYHEAD BACKEND — Vercel functions"]
+        direction TB
+        sess["/api/session<br/>mints a 5-min token"]
+        ph["/api/playhead<br/>heartbeat, 1×/sec"]
+        tools["/tools/passage_at_playhead<br/>/tools/go_to_topic"]
+        booksapi["/api/books<br/>transcribe → chunk → embed"]
+    end
+
+    redis[("Upstash Redis<br/>playhead · pending seek<br/>book index · prior questions")]
+    gemini["Gemini<br/>embeddings, 768-d"]
+
+    sess -.->|"short-lived token"| mic
+    mic ==>|"listener's voice"| agent
+    agent ==>|"reply audio + transcripts"| ui
+    agent -.->|"HTTP tool call — server-to-server.<br/><b>Cannot see the browser.</b>"| tools
+
+    book -->|"currentTime"| ph
+    ph --> redis
+    tools --> redis
+    redis -.->|"pending seek rides<br/>the heartbeat reply"| book
+    ui --> store
+
+    booksapi --> trans
+    booksapi --> gemini
+    booksapi --> redis
+    tools --> gemini
+
+    classDef client fill:#dce9e6,stroke:#1d5c54,color:#111
+    classDef vendor fill:#f0e0dd,stroke:#9c2b2b,color:#111
+    classDef server fill:#e9e6df,stroke:#6a655c,color:#111
+    class book,mic,ui,store client
+    class agent,trans,gemini vendor
+    class sess,ph,tools,booksapi,redis server
 ```
 
-Three things worth noting:
+**The seam this is all built around:** the agent runs on AssemblyAI's servers
+and calls our tool over plain HTTP. It cannot see the page, so it has no idea
+where playback is — and the page cannot be reached by the agent, so a jump
+cannot be pushed to it. Both directions go through Redis: the browser writes
+its position once a second, the tool reads it there, and `go_to_topic` leaves a
+position behind that the next heartbeat reply collects. That is what makes a
+*position-first* agent possible on a serverless deployment at all.
+
+Three more things worth noting:
 
 - **The backend holds no websocket.** The browser connects straight to
   AssemblyAI with a five-minute token this server mints, so the API key never

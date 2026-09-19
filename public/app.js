@@ -51,6 +51,16 @@ function clockText(t) {
 
 // ---------- the conversation ----------
 
+// The opening copy, kept in JS so clearing the conversation can put it back
+// rather than leaving an empty panel.
+const LEDE = [
+  'Press <b>Start listening</b>, let it play, then just talk over it. Try '
+  + '<b>&ldquo;wait, what did that last part mean?&rdquo;</b> &mdash; the question names no '
+  + 'topic, so there is nothing to search for. Playhead answers it from where you are '
+  + 'in the audio.',
+  'Or say <b>&ldquo;take me to the part about the train&rdquo;</b> and the book moves there.',
+];
+
 let ledeCleared = false;
 function turn(who, text, cls) {
   if (!ledeCleared) {
@@ -167,10 +177,13 @@ function duration() {
 function renderMarks() {
   const holder = el("spinemarks");
   const dur = duration();
-  const flow = narrow();
+  // Without a duration there is nowhere on the axis to put a mark -- but
+  // imported notes arrive before the audio has reported its length, and
+  // dropping them silently makes an import look like it did nothing. Fall
+  // back to the same flat list the phone layout uses until the length lands.
+  const flow = narrow() || !dur;
   holder.classList.toggle("flow", flow);
   holder.textContent = "";
-  if (!dur) return;
   notes.forEach((n) => {
     const b = document.createElement("button");
     b.className = "mark";
@@ -323,8 +336,29 @@ async function importNotes(file) {
   notes.sort((x, y) => x.t - y.t);
   storageSet(notesKey(), notes);
   renderNotes();
+  // Imported questions are only useful to the agent if it hears about them.
+  // They are normally handed over when a session starts, so importing into a
+  // session already running has to push them itself -- otherwise the import
+  // does nothing until the next reload, which is the opposite of the point.
+  pushContext();
   debug("imported " + incoming.length + " notes");
   setStatus(`imported ${incoming.length} notes`, "idle");
+}
+
+// Hand this listener's past questions to the backend, so the tool can remind
+// the agent what they have already asked about. Questions only: enough for
+// continuity, and far less to confuse it than whole past conversations. Called
+// when a session starts, and again after an import during one.
+function pushContext() {
+  if (!session || !notes.length) return;
+  fetch("/api/context", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: session.session_id,
+      questions: notes.slice(-8).map((n) => ({ t: n.t, q: n.q })),
+    }),
+  }).catch(() => { /* continuity is a bonus, never a blocker */ });
 }
 
 // Where they stopped, so the next visit can pick it up.
@@ -736,19 +770,7 @@ async function start() {
     return;
   }
 
-  // Hand last session's questions to the backend, so the tool can remind the
-  // agent what this listener has already asked about. Questions only: enough
-  // for continuity, and far less to confuse it than whole past conversations.
-  if (notes.length) {
-    fetch("/api/context", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: session.session_id,
-        questions: notes.slice(-8).map((n) => ({ t: n.t, q: n.q })),
-      }),
-    }).catch(() => { /* continuity is a bonus, never a blocker */ });
-  }
+  pushContext();
 
   ws = new WebSocket(`${WS_URL}?token=${encodeURIComponent(session.token)}`);
 
@@ -940,7 +962,22 @@ el("clearnotes").addEventListener("click", () => {
   notes = [];
   storageSet(notesKey(), notes);
   renderNotes();
+  // The conversation on screen is the same material as the notes, so clearing
+  // one while the other stays put looks like the button did nothing.
+  clearConversation();
 });
+
+// Wipe the transcript back to its opening state, lede and all.
+function clearConversation() {
+  transcriptEl.textContent = "";
+  ledeCleared = false;
+  LEDE.forEach((html) => {
+    const p = document.createElement("p");
+    p.className = "lede";
+    p.innerHTML = html;
+    transcriptEl.appendChild(p);
+  });
+}
 
 migrateOldKeys();
 notes = storageGet(notesKey(), []);

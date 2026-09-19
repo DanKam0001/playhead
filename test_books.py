@@ -48,6 +48,13 @@ def run(cmd):
         lst = LISTS.get(cmd[1], [])
         LISTS[cmd[1]] = lst[int(cmd[2]):int(cmd[3]) + 1]
         return "OK"
+    if op == "mget":
+        return [DB.get(k) for k in cmd[1:]]
+    if op == "expire":
+        return 1
+    if op == "incr":
+        DB[cmd[1]] = str(int(DB.get(cmd[1], 0)) + 1)
+        return int(DB[cmd[1]])
     if op == "lrange":
         lst = LISTS.get(cmd[1], [])
         stop = int(cmd[3])
