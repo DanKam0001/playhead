@@ -70,3 +70,24 @@ def test_public_hosts_resolve(monkeypatch):
     assert books._is_public_host("example.com") is True
     assert books._is_public_host("127.0.0.1") is False
     assert books._is_public_host("nonexistent.invalid") is False
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://youtu.be/dQw4w9WgXcQ",
+    "https://open.spotify.com/episode/abc123",
+    "https://drive.google.com/file/d/abc/view",
+])
+def test_a_page_is_not_a_file(url):
+    """AssemblyAI fetches the URL directly, so a watch page gives it HTML.
+    Failing here with a reason beats failing four minutes into a job."""
+    with pytest.raises(books.RejectedURL, match="web page|audio file"):
+        books.check_source(url)
+
+
+def test_the_hosting_message_says_what_does_work():
+    try:
+        books.check_source("https://youtu.be/abc")
+    except books.RejectedURL as exc:
+        assert "archive.org" in str(exc).lower()
+        assert ".mp3" in str(exc)

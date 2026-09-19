@@ -57,6 +57,15 @@ MAX_SOURCE_BYTES = 150 * 1024 * 1024
 # Speech, not music. Below this many characters per minute of audio, whatever
 # was sent is a song, a field recording, or silence with a cough in it.
 MIN_CHARS_PER_MINUTE = 250
+# Hosts that serve a page, not a file. AssemblyAI fetches the URL directly, so
+# these can never work, and pulling media out of them is against their terms
+# besides. Naming them lets us say why instead of failing minutes later.
+PAGE_NOT_FILE = {
+    "youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com",
+    "spotify.com", "open.spotify.com", "soundcloud.com", "vimeo.com",
+    "audible.com", "audible.co.uk", "podcasts.apple.com", "music.apple.com",
+    "drive.google.com", "dropbox.com", "twitch.tv", "tiktok.com",
+}
 AUDIO_EXTS = {"mp3", "m4a", "m4b", "wav", "ogg", "oga", "opus", "flac", "aac",
               "wma", "webm", "mp4", "mov", "mkv", "aiff", "aif", "caf"}
 
@@ -113,6 +122,18 @@ def check_source(url: str, max_bytes: int = MAX_SOURCE_BYTES) -> dict:
     parts = urllib.parse.urlparse(url)
     if parts.scheme not in ("http", "https"):
         raise RejectedURL("that needs to be an http or https link")
+
+    # A page that *contains* audio is not a link to audio. AssemblyAI fetches
+    # the URL directly, so a YouTube watch page gives it HTML. Saying that
+    # plainly beats a transcription job that fails four minutes later.
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    if host in PAGE_NOT_FILE:
+        raise RejectedURL(
+            f"{host} gives a web page, not an audio file, and there is no way "
+            f"to read the audio out of it from here. Paste a direct link to a "
+            f"media file - anything ending in .mp3, .m4a or .mp4. Archive.org, "
+            f"a podcast feed's enclosure, S3, or a Dropbox direct link "
+            f"(dl.dropboxusercontent.com) all work.")
     if not parts.hostname:
         raise RejectedURL("that link has no host in it")
     if not _is_public_host(parts.hostname):

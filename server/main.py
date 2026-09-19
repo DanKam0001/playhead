@@ -362,9 +362,14 @@ def _builtin_card() -> dict:
 # own shelf, not pre-built: it costs nothing until someone wants one, and
 # watching it index is the clearest demonstration of what this does.
 SUGGESTED = [
-    {"title": "Babbage - Of the Analytical Engine",
+    {"title": "Babbage - The first computer, by its inventor",
      "audio_url": "https://archive.org/download/life_of_a_philosopher_1909_librivox/lifeofaphilosopher_09_babbage_64kb.mp3",
-     "note": "The first computer, described by the man who designed it"},
+     "note": "\"The store\" and \"the mill\" - memory and CPU, described in 1864. "
+             "Ask it what they are at 11:18"},
+    {"title": "Babbage - The Analytical Engine, part 2",
+     "audio_url": "https://archive.org/download/life_of_a_philosopher_1909_librivox/lifeofaphilosopher_10_babbage_64kb.mp3",
+     "note": "Punched cards, conditional branching, and the cost of a machine "
+             "nobody would fund"},
     {"title": "Russell - Introduction to Mathematical Philosophy, ch. 1",
      "audio_url": "https://archive.org/download/mathematicalphilosophy_1508_librivox/mathematicalphilosophy_01_russell_64kb.mp3",
      "note": "What a number actually is. Sets, logic, foundations"},

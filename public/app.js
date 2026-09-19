@@ -123,6 +123,36 @@ function turn(who, text, cls) {
   return p;
 }
 
+// ---------- one thought, one turn ----------
+//
+// A pause mid-sentence ends a turn, so "I think... physical intuition is a...
+// limitation when it comes to..." arrives as five separate transcripts. The
+// agent handles that fine -- it answers the whole thought -- but the page was
+// printing five stub lines and filing five notes for one question.
+//
+// The agent's own turn_detection is set to wait longer (max_silence 2000 ms),
+// which is the real fix. This is the second half: while nothing has been
+// answered yet, consecutive fragments are the same question, so they are shown
+// and remembered as one.
+
+let openTurn = null;   // { p, node } of a user turn still being added to
+
+function addUserSpeech(text) {
+  text = (text || "").trim();
+  if (!text) return;
+  if (openTurn) {
+    // Join with a space unless the fragment starts with punctuation.
+    const joiner = /^[,.;:!?]/.test(text) ? "" : " ";
+    openTurn.p.textContent = (openTurn.p.textContent + joiner + text).trim();
+    openTurn.node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  } else {
+    const p = turn("you", text);
+    openTurn = { p, node: p.closest(".turn") };
+  }
+  // The note tracks the whole thought, not the first stub of it.
+  noteQuestion(openTurn.p.textContent);
+}
+
 // ---------- the book ----------
 
 function duck() {
@@ -225,9 +255,10 @@ function renderMarks() {
     const b = document.createElement("button");
     b.className = "mark";
     b.type = "button";
-    // Beside the axis at the right height on a wide screen; a plain list on a
-    // phone, where there is no room to hang labels off a bar.
-    if (!flow) b.style.top = Math.min(99, (n.t / dur) * 100).toFixed(2) + "%";
+    // Position in pixels, not percent, so overlapping marks can be pushed
+    // apart below. Two questions asked a minute apart in a long book land on
+    // the same few pixels and print on top of each other.
+    if (!flow) b.dataset.ideal = String((n.t / dur));
     b.setAttribute("aria-label", `Play from ${clockText(n.t)}: ${n.q}`);
     if (flow) {
       const at = document.createElement("i");
@@ -243,6 +274,31 @@ function renderMarks() {
       book.play().catch(() => {});
     });
     holder.appendChild(b);
+  });
+  if (!flow) spreadMarks(holder);
+}
+
+// Push overlapping marks apart.
+//
+// Two questions a minute apart in a long book land on the same few pixels, and
+// the labels print straight on top of each other. Each mark keeps its true
+// position unless something is already there, then it steps down just enough
+// to be readable -- so the ones that are actually far apart stay honest.
+const MARK_GAP = 19;   // px: label line-height plus a little air
+
+function spreadMarks(holder) {
+  const height = holder.getBoundingClientRect().height;
+  if (!height) return;
+  const marks = [...holder.children];
+  let floor = 0;
+  marks.forEach((b) => {
+    const ideal = Number(b.dataset.ideal || 0) * height;
+    const y = Math.max(ideal, floor);
+    b.style.top = Math.min(y, height - 2) + "px";
+    // A displaced mark says so, so the dot beside the axis is not read as the
+    // exact moment when it has been nudged.
+    b.classList.toggle("shifted", y - ideal > 2);
+    floor = y + MARK_GAP;
   });
 }
 
@@ -262,34 +318,25 @@ function seekFromEvent(e) {
 // Anyone who listens to books seriously listens fast, and the rate has to
 // survive changing book and reloading or it is a toy.
 
-const RATES = [1, 1.25, 1.5, 1.75, 2, 2.5, 3];
-
 function applyRate(r) {
+  r = Math.min(3, Math.max(1, Number(r) || 1));
   book.playbackRate = r;
-  // Keep voices sounding like voices rather than chipmunks at 2x.
+  // Keep voices sounding like voices rather than chipmunks at 2x. Three
+  // spellings because the unprefixed one is recent.
   book.preservesPitch = true;
   book.mozPreservesPitch = true;
   book.webkitPreservesPitch = true;
   storageSet("playhead:rate", r);
-  el("speeds").querySelectorAll("button").forEach((b) => {
-    b.setAttribute("aria-pressed", String(Number(b.dataset.rate) === r));
-  });
+  el("speed").value = String(r);
+  el("speedval").textContent = r.toFixed(2) + "×";
+  el("speedreset").hidden = r === 1;
 }
 
 function buildSpeeds() {
-  const holder = el("speeds");
-  const saved = Number(storageGet("playhead:rate", 1)) || 1;
-  holder.textContent = "";
-  RATES.forEach((r) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.dataset.rate = String(r);
-    b.textContent = r === 1 ? "1×" : r + "×";
-    b.setAttribute("aria-label", `Play at ${r} times speed`);
-    b.addEventListener("click", () => applyRate(r));
-    holder.appendChild(b);
-  });
-  applyRate(RATES.includes(saved) ? saved : 1);
+  const slider = el("speed");
+  slider.addEventListener("input", () => applyRate(slider.value));
+  el("speedreset").addEventListener("click", () => applyRate(1));
+  applyRate(Number(storageGet("playhead:rate", 1)) || 1);
 }
 
 // ---------- table of contents ----------
@@ -404,8 +451,9 @@ function storageSet(key, value) {
 
 function noteQuestion(text) {
   // Capture the position now: by the time the answer arrives the book may have
-  // moved, and the note is only useful if it points where the question was asked.
-  pendingQ = { t: book.currentTime, q: text };
+  // moved, and the note is only useful if it points where the question was
+  // asked. A stitched question keeps the position of its first fragment.
+  pendingQ = { t: pendingQ ? pendingQ.t : book.currentTime, q: text };
 }
 
 function noteAnswer(text) {
@@ -418,10 +466,16 @@ function noteAnswer(text) {
 }
 
 function renderNotes() {
-  el("noteactions").hidden = notes.length === 0;
+  // Always shown. Import in particular has to be reachable when there are no
+  // notes yet -- that is exactly the moment someone arriving on a second
+  // machine needs it, and hiding it made the whole section look missing.
+  el("noteactions").hidden = false;
+  el("export").disabled = notes.length === 0;
+  el("clearnotes").disabled = notes.length === 0;
+  el("notecount").textContent = notes.length ? String(notes.length) : "";
   el("railnote").textContent = notes.length
-    ? `${notes.length} question${notes.length > 1 ? "s" : ""} on this book. Click one to play from there.`
-    : "Your questions get pinned to the spine at the moment you asked them — a map of where the book lost you.";
+    ? `${notes.length} question${notes.length > 1 ? "s" : ""} on this book. Click a mark to play from there.`
+    : "Questions you ask get pinned to the spine where you asked them. Import a file to bring notes from another machine.";
   renderMarks();
 }
 
@@ -976,12 +1030,15 @@ async function start() {
       case "transcript.user":
         if (partial) partial.closest(".turn").remove();
         partial = null;
-        turn("you", m.text || "");
         // A command is an instruction, not a question: it gets acted on here
         // and is deliberately not kept as a note. "Carry on" is not a thing
         // anyone wants on their map of where the book lost them.
-        if (handleCommand(m.text)) break;
-        noteQuestion(m.text || "");
+        if (handleCommand(m.text)) {
+          turn("you", m.text || "");
+          openTurn = null;
+          break;
+        }
+        addUserSpeech(m.text || "");
         pauseBook();
         setStatus("thinking", "busy");
         break;
@@ -991,6 +1048,8 @@ async function start() {
         break;
 
       case "reply.started":
+        // The thought has been answered; the next thing said is a new one.
+        openTurn = null;
         agentSpeaking = true;
         flushReply();
         setStatus("answering", "busy");

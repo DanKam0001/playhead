@@ -111,15 +111,38 @@
     font-family:var(--mono); font-size:10.5px; letter-spacing:.1em;
     text-transform:uppercase; color:var(--ink-3); font-weight:400; margin:0 0 10px;
   }
-  .speeds{display:flex; flex-wrap:wrap; gap:4px; margin-bottom:26px}
-  .speeds button{
-    background:var(--raised); border:1px solid var(--rule-2); border-radius:3px;
-    padding:5px 0; width:calc(33.33% - 3px); font-family:var(--mono);
-    font-size:11.5px; color:var(--ink-2); font-variant-numeric:tabular-nums;
+  .speeds{margin-bottom:26px}
+  .speedrow{display:flex; align-items:baseline; justify-content:space-between;
+            margin-bottom:7px}
+  #speedval{font-family:var(--mono); font-size:13px; color:var(--ink);
+            font-variant-numeric:tabular-nums; font-weight:500}
+  #speedreset{background:none; border:0; padding:0; font-size:10.5px;
+              color:var(--ink-3); text-decoration:underline}
+  #speedreset:hover{color:var(--mark)}
+  #speed{
+    -webkit-appearance:none; appearance:none; width:100%; height:18px;
+    background:transparent; display:block; cursor:pointer;
   }
-  .speeds button:hover{border-color:var(--ink-3); color:var(--ink)}
-  .speeds button[aria-pressed="true"]{
-    background:var(--ink); border-color:var(--ink); color:var(--bg);
+  #speed::-webkit-slider-runnable-track{
+    height:4px; border-radius:2px; background:var(--sunk);
+    border:1px solid var(--rule);
+  }
+  #speed::-moz-range-track{
+    height:4px; border-radius:2px; background:var(--sunk);
+    border:1px solid var(--rule);
+  }
+  #speed::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none; width:14px; height:14px;
+    border-radius:50%; background:var(--raised); border:2px solid var(--live);
+    margin-top:-6px; box-shadow:var(--shadow);
+  }
+  #speed::-moz-range-thumb{
+    width:14px; height:14px; border-radius:50%; background:var(--raised);
+    border:2px solid var(--live); box-shadow:var(--shadow);
+  }
+  .speedticks{
+    display:flex; justify-content:space-between; margin-top:2px;
+    font-family:var(--mono); font-size:9.5px; color:var(--ink-3);
   }
 
   .toc ol{list-style:none; margin:0; padding:0; max-height:52vh; overflow-y:auto}
@@ -201,13 +224,19 @@
   .mark span{
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
+  .mark.shifted::after{
+    content:""; position:absolute; left:3px; top:50%; width:1px; height:0;
+    background:var(--rule-2);
+  }
   .mark:hover{color:var(--ink)}
   .mark:hover span{text-decoration:underline}
 
-  .railnote{
-    margin:18px 0 0; font-size:11.5px; line-height:1.55; color:var(--ink-3);
-    border-top:1px solid var(--rule); padding-top:14px;
-  }
+  .notes{margin-top:20px; border-top:1px solid var(--rule); padding-top:14px}
+  .notes h2{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em;
+            text-transform:uppercase; color:var(--ink-3); font-weight:400;
+            margin:0 0 8px}
+  #notecount{color:var(--mark)}
+  .railnote{margin:0; font-size:11.5px; line-height:1.55; color:var(--ink-3)}
   .railactions{display:flex; gap:6px; flex-wrap:wrap; margin-top:10px}
   .tiny{
     background:none; border:1px solid var(--rule-2); border-radius:3px;
@@ -436,15 +465,18 @@
       <div class="marks" id="spinemarks"></div>
     </div>
 
-    <p class="railnote" id="railnote">
-      Your questions get pinned to the spine at the moment you asked them &mdash;
-      a map of where the book lost you.
-    </p>
-    <div class="railactions" id="noteactions" hidden>
-      <button class="tiny" id="export" type="button">Export</button>
-      <label class="tiny" for="importfile" tabindex="0" role="button">Import</label>
-      <input id="importfile" type="file" accept=".md,.json,text/markdown" class="vh">
-      <button class="tiny" id="clearnotes" type="button">Clear</button>
+    <div class="notes">
+      <h2>Your notes <span id="notecount"></span></h2>
+      <p class="railnote" id="railnote">
+        Your questions get pinned to the spine at the moment you asked them &mdash;
+        a map of where the book lost you.
+      </p>
+      <div class="railactions" id="noteactions" hidden>
+        <button class="tiny" id="export" type="button">Export</button>
+        <label class="tiny" for="importfile" tabindex="0" role="button">Import</label>
+        <input id="importfile" type="file" accept=".md,.json,text/markdown" class="vh">
+        <button class="tiny" id="clearnotes" type="button">Clear</button>
+      </div>
     </div>
 
     <!-- Nobody discovers a voice interface by guessing. The vocabulary has to
@@ -532,7 +564,15 @@
   <aside class="aside">
     <div class="speed">
       <h2>Speed</h2>
-      <div class="speeds" id="speeds"></div>
+      <div class="speeds">
+        <div class="speedrow">
+          <span id="speedval">1.00&times;</span>
+          <button id="speedreset" type="button">reset</button>
+        </div>
+        <input type="range" id="speed" min="1" max="3" step="0.25" value="1"
+               aria-label="Playback speed">
+        <div class="speedticks"><span>1&times;</span><span>2&times;</span><span>3&times;</span></div>
+      </div>
     </div>
 
     <div class="toc">

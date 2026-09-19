@@ -395,6 +395,24 @@ inside a try that retries without it, and `books.contents()` still derives a
 table of contents from the transcript when it is missing or returns fewer than
 two. Do not delete that fallback.
 
+## Turn detection (set 2026-09-19)
+
+`input.turn_detection` on the stored agent. Documented parameters are
+`vad_threshold`, `min_silence`, `max_silence`, `interrupt_response` and
+`interruption_delay`; set here to `min_silence: 700`, `max_silence: 2000`,
+`interruption_delay: 300`.
+
+**The validator accepts ANY shape under `turn_detection` without complaint** —
+`{"bogus_field": 1}` and the bare string `"nonsense"` both return 200 and are
+stored verbatim. So a typo silently does nothing. Copy names from the docs, and
+verify by reading the agent back.
+
+Why: someone thinking aloud — *"I think... physical intuition is a...
+limitation when it comes to..."* — was split into five turns. The agent
+answered the whole thought correctly, but the page printed five stubs and filed
+five notes. `web/app.js` also stitches consecutive user transcripts into one
+turn while nothing has been answered yet (`openTurn`, reset on `reply.started`).
+
 ## Tests
 
 `pytest` — 51 tests, no keys, no network, no audio hardware. That is a hard
