@@ -68,6 +68,13 @@
     margin:0;
   }
   .wordmark em{font-style:italic; color:var(--mark)}
+  /* A book is the one teacher you cannot raise your hand at. Three words
+     carry the whole product, so they go where the eye lands first. */
+  .tagline{
+    margin:0; font-family:var(--serif); font-style:italic; font-size:15px;
+    color:var(--mark); white-space:nowrap;
+  }
+  .tagline::before{content:"— "; color:var(--ink-3); font-style:normal}
   .nowplaying{
     flex:1; min-width:140px; color:var(--ink-2); font-size:13.5px;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -314,6 +321,7 @@
     .stage{padding:20px 20px 50px}
     header{padding:12px 20px; gap:10px 14px}
     .wordmark{font-size:20px}
+    .tagline{display:none}
     .nowplaying{order:3; flex-basis:100%; min-width:0}
     .turn{grid-template-columns:44px minmax(0,1fr); gap:0 12px}
     .turn.playhead .body p{font-size:17px}
@@ -335,6 +343,7 @@
 
 <header>
   <h1 class="wordmark">Play<em>head</em></h1>
+  <p class="tagline">Raise your hand.</p>
   <p class="nowplaying">Playing <b id="booktitle">Relativity: The Special and General Theory</b></p>
   <button class="btn" id="librarybtn" aria-expanded="false" aria-controls="library">Library &amp; books</button>
 </header>
