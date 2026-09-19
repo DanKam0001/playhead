@@ -126,6 +126,9 @@ never updates, and it latches on forever. Hence calibrating before arming.
 | Vectors sharded, float16, 100 per key | 100 x 768 x 2 B = 154 KB, ~205 KB base64 — comfortably under Upstash's 1 MB request cap, and one shard is one Gemini batch. `test_books.py` proves float16 still recovers the exact top hit. |
 | Times kept apart from text | A window lookup runs on every question and only needs `[[start,end],...]` (~20 B/chunk) plus the one text shard it lands in. Storing them together would drag a whole book across the wire per question. |
 | Uploads capped at 4 MB, links uncapped | The platform caps a request body at 4.5 MB. The browser checks size *before* sending so an audiobook gets a sentence, not an edge-level failure. AssemblyAI has no browser-safe upload token (checked 2026-09-19), so the key cannot move to the client. |
+| The books API is unauthenticated, so the guards are at the edges | No accounts by design. So: hosts resolved and private/loopback/link-local refused **before** any fetch (we make the request, so an unchecked link is our SSRF), redirects re-checked per hop, HEAD for type and size, and a per-IP hourly cap that counts **created** books, not attempts — charging someone's quota for a typo is rude, and a rejected paste only costs us a HEAD. |
+| The shelf is per browser, not global | A single shared list would put whatever a stranger added on the front page of a demo that is about to be judged in public. `x-client-id` is a random localStorage string: an identifier, not a credential. |
+| Speech density, not just "is it empty" | Music and ambience transcribe to a little text over a long duration, which indexes fine and then answers nothing — reading as a broken product rather than wrong input. Under 250 characters/minute is rejected with a sentence saying why. |
 | The spine is the UI | Everything here is anchored to a position in time, so the page is a time axis with marks on it, rather than a stack of cards. Structure carries the information. |
 | Streaming TTS kept but **measured no win** | 2.35 s vs 2.49 s; replies are ~250 chars so time-to-first-token dominates. Settled — don't redo this experiment. |
 
@@ -303,6 +306,27 @@ keep it.
   real fix for multiple listeners is out-of-band, not a parameter.
 - (Browser) `createScriptProcessor` accepts only powers of two; `1200` threw
   `IndexSizeError` and read as "microphone blocked".
+
+### iOS: the book was silent while the agent worked perfectly (2026-09-19)
+
+Reported from a real iPhone: mic and agent fine, **book never played**. iOS only
+allows script-started audio when it can trace the call to a real tap, and **that
+trace is lost across the first `await`**. `book.play()` was being called from the
+`session.ready` websocket event — no gesture, silently blocked. Desktop Chrome
+does not care, so this is invisible unless tested on a device.
+
+`unlockAudio()` now runs synchronously at the top of the Start click handler,
+before any `await`: it opens both AudioContexts (reusing them afterwards rather
+than letting `startMic` build a second, suspended one) and play/pauses the
+`<audio>` element purely to mark it user-started. Also use
+`window.AudioContext || window.webkitAudioContext` — older iOS only has the
+prefixed one.
+
+Two more things that only show on a phone: `hidden` loses to any author
+`display` rule (`[hidden]{display:none !important}` is in the stylesheet for
+this reason), and headless Edge on this machine reports a 477 px viewport for
+`--window-size=390`, so responsive checks need an iframe of a fixed width to
+measure anything real.
 
 ## Bring your own audiobook (built 2026-09-19)
 

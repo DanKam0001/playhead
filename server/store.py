@@ -52,6 +52,7 @@ class PlayheadStore(Protocol):
     def kv_get(self, key: str) -> Optional[str]: ...
     def kv_push(self, key: str, value: str) -> None: ...
     def kv_list(self, key: str, n: int = 50) -> list: ...
+    def kv_incr(self, key: str, ttl: int) -> int: ...
 
 
 class MemoryStore:
@@ -64,6 +65,7 @@ class MemoryStore:
         self._books: dict[str, str] = {}
         self._kv: dict[str, str] = {}
         self._lists: dict[str, list] = {}
+        self._counts: dict[str, int] = {}
 
     def set(self, session_id: str, seconds: float) -> None:
         self._prune()
@@ -125,6 +127,10 @@ class MemoryStore:
 
     def kv_list(self, key: str, n: int = 50) -> list:
         return list(self._lists.get(key, []))[:n]
+
+    def kv_incr(self, key: str, ttl: int) -> int:
+        self._counts[key] = self._counts.get(key, 0) + 1
+        return self._counts[key]
 
     @property
     def kind(self) -> str:
@@ -269,6 +275,15 @@ class RedisStore:
     def kv_list(self, key: str, n: int = 50) -> list:
         raw = self._post("lrange", key, "0", str(n - 1))
         return list(raw or [])
+
+    def kv_incr(self, key: str, ttl: int) -> int:
+        """Count something in a window. The EX only lands on the first hit,
+        so the window is fixed from the first request rather than sliding
+        forward forever as more arrive."""
+        n = int(self._post("incr", key) or 0)
+        if n == 1:
+            self._post("expire", key, str(ttl))
+        return n
 
     @property
     def kind(self) -> str:

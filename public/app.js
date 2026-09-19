@@ -133,11 +133,24 @@ function applySeek(seconds) {
 // each question was asked. Doubles as the scrubber, so position is read and
 // set in the same place.
 
+// On a phone the rail sits above the conversation rather than beside it, so the
+// axis lies flat and the questions become a list under it. Same information,
+// turned ninety degrees.
+const narrow = () => window.matchMedia("(max-width: 820px)").matches;
+
 function paintSpine() {
   const dur = duration();
   const frac = dur ? Math.min(1, book.currentTime / dur) : 0;
-  el("spinefill").style.height = (frac * 100).toFixed(2) + "%";
-  el("spinecursor").style.top = (frac * 100).toFixed(2) + "%";
+  const pct = (frac * 100).toFixed(2) + "%";
+  const fill = el("spinefill").style;
+  const cur = el("spinecursor").style;
+  if (narrow()) {
+    fill.width = pct; fill.height = "100%";
+    cur.left = pct; cur.top = "50%";
+  } else {
+    fill.height = pct; fill.width = "100%";
+    cur.top = pct; cur.left = "50%";
+  }
   el("clock").textContent = clockText(book.currentTime);
   el("total").textContent = "/ " + clockText(dur);
   const spine = el("spine");
@@ -154,14 +167,24 @@ function duration() {
 function renderMarks() {
   const holder = el("spinemarks");
   const dur = duration();
+  const flow = narrow();
+  holder.classList.toggle("flow", flow);
   holder.textContent = "";
   if (!dur) return;
   notes.forEach((n) => {
     const b = document.createElement("button");
     b.className = "mark";
     b.type = "button";
-    b.style.top = Math.min(99, (n.t / dur) * 100).toFixed(2) + "%";
+    // Beside the axis at the right height on a wide screen; a plain list on a
+    // phone, where there is no room to hang labels off a bar.
+    if (!flow) b.style.top = Math.min(99, (n.t / dur) * 100).toFixed(2) + "%";
     b.setAttribute("aria-label", `Play from ${clockText(n.t)}: ${n.q}`);
+    if (flow) {
+      const at = document.createElement("i");
+      at.className = "markat";
+      at.textContent = clockText(n.t);
+      b.append(at);
+    }
     const label = document.createElement("span");
     label.textContent = n.q;
     b.append(label);
@@ -175,10 +198,12 @@ function renderMarks() {
 
 function seekFromEvent(e) {
   const rect = el("spine").getBoundingClientRect();
-  const y = (e.clientY !== undefined ? e.clientY : e.touches[0].clientY) - rect.top;
   const dur = duration();
   if (!dur) return;
-  book.currentTime = Math.max(0, Math.min(dur, (y / rect.height) * dur));
+  const frac = narrow()
+    ? (e.clientX - rect.left) / rect.width
+    : (e.clientY - rect.top) / rect.height;
+  book.currentTime = Math.max(0, Math.min(dur, frac * dur));
   paintSpine();
 }
 
@@ -311,8 +336,23 @@ function offerResume() {
 
 let currentBook = null;
 let shelf = [];
+let suggested = [];
 let localAudio = {};     // book id -> object URL, for files added this session
 let needsFile = false;   // the selected book came from a file we no longer hold
+
+// Scopes the shelf to this browser. There are no accounts, and a single shared
+// shelf would put whatever a stranger added on the front page of a live demo.
+// An identifier, not a credential -- it guards tidiness, not secrets.
+function clientId() {
+  let id = storageGet("echoread:client", null);
+  if (!id) {
+    id = "c" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    storageSet("echoread:client", id);
+  }
+  return id;
+}
+
+const withClient = (extra) => Object.assign({ "x-client-id": clientId() }, extra || {});
 
 function addStatus(msg, bad) {
   const p = el("addstatus");
@@ -322,10 +362,12 @@ function addStatus(msg, bad) {
 
 async function loadShelf() {
   try {
-    const data = await (await fetch("/api/books")).json();
+    const data = await (await fetch("/api/books", { headers: withClient() })).json();
     shelf = data.books || [];
+    suggested = data.suggested || [];
   } catch (_) { shelf = []; }
   renderShelf();
+  renderSuggested();
   if (!currentBook) {
     const saved = storageGet("echoread:book", null);
     const pick = shelf.find((b) => b.id === saved) || shelf[0];
@@ -411,12 +453,36 @@ function selectBook(b, quiet) {
   if (session) reportPlayhead();
 }
 
+function renderSuggested() {
+  const list = el("suggested");
+  if (!list) return;
+  list.textContent = "";
+  const have = new Set(shelf.map((b) => b.audio_url));
+  suggested.filter((s) => !have.has(s.audio_url)).forEach((s) => {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = s.title;
+    const note = document.createElement("span");
+    note.className = "m";
+    note.textContent = s.note || "";
+    btn.append(t, note);
+    btn.addEventListener("click", () => addByUrl(s.audio_url, s.title));
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
+  el("suggestedwrap").hidden = list.children.length === 0;
+}
+
 async function pollBook(id) {
   for (let i = 0; i < 240; i++) {
     await new Promise((r) => setTimeout(r, 2500));
     let rec;
     try {
-      rec = await (await fetch("/api/books/" + encodeURIComponent(id))).json();
+      rec = await (await fetch("/api/books/" + encodeURIComponent(id),
+                               { headers: withClient() })).json();
     } catch (_) { continue; }
     const at = shelf.findIndex((b) => b.id === rec.id);
     if (at >= 0) shelf[at] = rec; else shelf.push(rec);
@@ -437,22 +503,23 @@ async function pollBook(id) {
   }
 }
 
-async function addByUrl() {
-  const url = el("addurl").value.trim();
+async function addByUrl(presetUrl, presetTitle) {
+  const url = (presetUrl || el("addurl").value).trim();
   if (!url) return;
   el("addbtn").disabled = true;
   addStatus("Sending it off to be transcribed …");
   try {
     const res = await fetch("/api/books", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ audio_url: url }),
+      headers: withClient({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ audio_url: url, title: presetTitle || "" }),
     });
     const rec = await res.json();
     if (!res.ok) throw new Error(rec.detail || "could not add that");
-    el("addurl").value = "";
+    if (!presetUrl) el("addurl").value = "";
     shelf.push(rec);
     renderShelf();
+    renderSuggested();
     pollBook(rec.id);
   } catch (e) {
     addStatus(e.message, true);
@@ -484,8 +551,8 @@ async function addByFile(file) {
   try {
     const res = await fetch("/api/books/upload", {
       method: "POST",
-      headers: { "Content-Type": "application/octet-stream",
-                 "x-book-title": file.name.replace(/\.[^.]+$/, "") },
+      headers: withClient({ "Content-Type": "application/octet-stream",
+                            "x-book-title": file.name.replace(/\.[^.]+$/, "") }),
       body: file,
     });
     const rec = await res.json();
@@ -533,7 +600,10 @@ async function startMic() {
       channelCount: 1,
     },
   });
-  micCtx = new AudioContext({ sampleRate: RATE });
+  // Already opened by unlockAudio() inside the tap; reuse it rather than
+  // building a second one, which iOS would hand back suspended.
+  if (!micCtx) micCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
+  if (micCtx.state === "suspended") await micCtx.resume();
   const src = micCtx.createMediaStreamSource(stream);
   micNode = micCtx.createScriptProcessor(FRAME, 1, 1);
   micNode.onaudioprocess = (e) => {
@@ -554,7 +624,7 @@ function playReply(b64) {
   // Schedule each chunk after the previous one. The device drains at exactly
   // 24 kHz, so consecutive buffers join without gaps; sleep-based timing drifts
   // and produces clicks.
-  if (!outCtx) outCtx = new AudioContext({ sampleRate: RATE });
+  if (!outCtx) outCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
   const bin = atob(b64);
   const pcm = new Int16Array(bin.length / 2);
   for (let i = 0; i < pcm.length; i++) {
@@ -579,11 +649,32 @@ function flushReply() {
 
 // ---------- session ----------
 
+// iOS will not let a script start audio unless it can trace the call back to a
+// real tap, and that trace is lost across the first `await`. So everything that
+// needs unlocking is opened here, synchronously, at the top of the click
+// handler: the two AudioContexts, and the <audio> element itself, which is
+// played and immediately paused purely to mark it as user-started. Without
+// this the agent works perfectly on an iPhone and the book stays silent.
+function unlockAudio() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!outCtx) outCtx = new Ctx({ sampleRate: RATE });
+    if (!micCtx) micCtx = new Ctx({ sampleRate: RATE });
+    if (outCtx.state === "suspended") outCtx.resume();
+    if (micCtx.state === "suspended") micCtx.resume();
+    const p = book.play();
+    if (p && p.then) p.then(() => book.pause()).catch((e) => debug("unlock: " + e.name));
+  } catch (err) {
+    debug("audio unlock failed: " + err.name);
+  }
+}
+
 async function start() {
   if (needsFile) {
     addStatus("This book has no audio loaded — choose the file below first.", true);
     return;
   }
+  unlockAudio();
   startBtn.disabled = true;
   setStatus("connecting", "busy");
   try {
@@ -767,8 +858,15 @@ el("librarybtn").addEventListener("click", () => {
   el("librarybtn").setAttribute("aria-expanded", String(open));
 });
 
-el("addbtn").addEventListener("click", addByUrl);
+el("addbtn").addEventListener("click", () => addByUrl());
 el("addurl").addEventListener("keydown", (e) => { if (e.key === "Enter") addByUrl(); });
+
+// The spine changes axis with the layout, so it has to be repainted when the
+// layout changes under it -- a rotated phone, or a resized window.
+window.matchMedia("(max-width: 820px)").addEventListener("change", () => {
+  paintSpine();
+  renderMarks();
+});
 el("filepick").addEventListener("change", (e) => {
   if (e.target.files[0]) addByFile(e.target.files[0]);
   e.target.value = "";

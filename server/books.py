@@ -23,6 +23,7 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import List, Optional
@@ -46,6 +47,106 @@ BOOK_TTL = 30 * 24 * 3600
 # An upper bound on a single book, so one enormous file cannot exhaust the
 # store. ~1800 chunks is a ten-hour book.
 MAX_CHUNKS = 2000
+
+
+# A book has to be plausibly a book: long enough to be worth indexing, small
+# enough that one link cannot run up an unbounded transcription bill.
+MAX_SOURCE_BYTES = 150 * 1024 * 1024
+# Speech, not music. Below this many characters per minute of audio, whatever
+# was sent is a song, a field recording, or silence with a cough in it.
+MIN_CHARS_PER_MINUTE = 250
+AUDIO_EXTS = {"mp3", "m4a", "m4b", "wav", "ogg", "oga", "opus", "flac", "aac",
+              "wma", "webm", "mp4", "mov", "mkv", "aiff", "aif", "caf"}
+
+
+class RejectedURL(ValueError):
+    """The link is not something we are willing to hand to a transcriber."""
+
+
+def _is_public_host(host: str) -> bool:
+    """Resolve a hostname and refuse anything that is not a public address.
+
+    We make the request from our own server, so an unchecked link is a
+    server-side request forgery: 169.254.169.254 is a cloud metadata endpoint,
+    and 127.0.0.1 is whatever else happens to be listening next to us.
+    """
+    import ipaddress
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
+
+
+class _GuardedRedirects(urllib.request.HTTPRedirectHandler):
+    """Re-check the host on every hop.
+
+    Validating only the URL someone typed is not enough: a public host is free
+    to redirect us straight at a private one.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        host = urllib.parse.urlparse(newurl).hostname or ""
+        if not _is_public_host(host):
+            raise RejectedURL("that link redirects somewhere we will not follow")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def check_source(url: str) -> dict:
+    """Decide whether a link is worth handing to AssemblyAI, before we do.
+
+    Returns what the HEAD told us. A server that refuses HEAD is not treated as
+    a failure -- plenty of file hosts do -- but then nothing is known about the
+    file and MAX_CHUNKS is the only ceiling left.
+    """
+    parts = urllib.parse.urlparse(url)
+    if parts.scheme not in ("http", "https"):
+        raise RejectedURL("that needs to be an http or https link")
+    if not parts.hostname:
+        raise RejectedURL("that link has no host in it")
+    if not _is_public_host(parts.hostname):
+        raise RejectedURL("that address is not reachable from the public internet")
+
+    opener = urllib.request.build_opener(_GuardedRedirects)
+    req = urllib.request.Request(url, method="HEAD",
+                                 headers={"User-Agent": "EchoRead/1.0"})
+    try:
+        with opener.open(req, timeout=10) as r:
+            ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            length = int(r.headers.get("Content-Length") or 0)
+    except RejectedURL:
+        raise
+    except Exception as exc:
+        # Plenty of file hosts refuse HEAD, so this cannot be fatal. But with
+        # nothing known about the file, a clearly non-audio extension is the
+        # only signal left -- and it catches the common paste-the-wrong-link
+        # mistake. No extension at all (CDNs, stream URLs) still goes through.
+        print(f"[books] HEAD failed for {url[:80]}: {exc}")
+        ext = re.search(r"\.([a-z0-9]{2,5})$", parts.path, re.I)
+        if ext and ext.group(1).lower() not in AUDIO_EXTS:
+            raise RejectedURL(f"that link ends in .{ext.group(1).lower()}, "
+                              f"which is not an audio file")
+        return {"content_type": "", "bytes": 0}
+
+    if length and length > MAX_SOURCE_BYTES:
+        raise RejectedURL(
+            f"that file is {length / 1e6:.0f} MB, and the ceiling here is "
+            f"{MAX_SOURCE_BYTES // 1_000_000} MB. Try a single chapter.")
+    # Plenty of hosts serve audio as octet-stream, so only a confidently wrong
+    # type is rejected.
+    if ctype and not (ctype.startswith("audio/") or ctype.startswith("video/")
+                      or ctype in ("application/octet-stream", "binary/octet-stream")):
+        raise RejectedURL(f"that link is {ctype}, not an audio file")
+    return {"content_type": ctype, "bytes": length}
 
 
 def slug(title: str) -> str:
@@ -142,20 +243,29 @@ def save(store, rec: BookRecord) -> None:
     store.kv_set(_key(rec.id), json.dumps(rec.__dict__), ttl=BOOK_TTL)
 
 
-def create(store, title: str, audio_url: str, aai_key: str) -> BookRecord:
+def _shelf_key(client_id: str) -> str:
+    return f"echoread:books:{client_id or 'anon'}"
+
+
+def create(store, title: str, audio_url: str, aai_key: str, client_id: str = "") -> BookRecord:
     rec = BookRecord(id=slug(title), title=title.strip() or "Untitled book",
                      audio_url=audio_url, created=time.time())
     rec.transcript_id = start_transcription(audio_url, aai_key)
     save(store, rec)
-    store.kv_push("echoread:books", rec.id)
+    store.kv_push(_shelf_key(client_id), rec.id)
     return rec
 
 
-def shelf(store) -> List[dict]:
-    """Every book anyone has added, newest first. One shared shelf is the
-    right scope here: no accounts, and a book added is a book worth sharing."""
+def shelf(store, client_id: str = "") -> List[dict]:
+    """The books this browser added, newest first.
+
+    Deliberately not a shared shelf. There are no accounts, so a global list
+    would put whatever a stranger uploaded on the front page of a live demo --
+    and this one is being judged in public. The client id is a random string
+    the browser keeps in localStorage; it is an identifier, not a credential.
+    """
     out = []
-    for book_id in store.kv_list("echoread:books", 30):
+    for book_id in store.kv_list(_shelf_key(client_id), 30):
         rec = load(store, book_id)
         if rec:
             out.append(rec.public())
@@ -202,7 +312,19 @@ def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
                "audio_duration": t.get("audio_duration", 0)}
     chunks = _chunks_from(payload)
     if not chunks:
-        return _fail(store, rec, "the transcript came back empty - is there speech in it?")
+        return _fail(store, rec, "there is no speech in that recording - "
+                                 "EchoRead needs someone reading out loud.")
+
+    # Music, ambience and silence all transcribe to almost nothing spread over a
+    # long duration. Indexing that produces a book the agent cannot answer from,
+    # which reads as the product being broken rather than the input being wrong.
+    minutes = max((payload.get("audio_duration") or 0) / 60.0, 0.5)
+    density = len(payload.get("text", "")) / minutes
+    if density < MIN_CHARS_PER_MINUTE:
+        return _fail(store, rec,
+                     f"that recording has very little speech in it "
+                     f"({density:.0f} characters a minute). EchoRead indexes "
+                     f"narration - music or ambience gives it nothing to answer from.")
 
     chunks = chunks[:MAX_CHUNKS]
     # Times are read on every single question, so they are kept apart from the

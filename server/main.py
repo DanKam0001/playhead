@@ -274,14 +274,66 @@ def _builtin_card() -> dict:
             "duration": round(library.duration_hint(), 1), "builtin": True}
 
 
+# Public domain narration, so anyone landing on the demo has something real to
+# try without hunting for a link. These are indexed on demand into the visitor's
+# own shelf, not pre-built: it costs nothing until someone wants one, and
+# watching it index is the clearest demonstration of what this does.
+SUGGESTED = [
+    {"title": "Sun Tzu - The Art of War, ch. 1-2",
+     "audio_url": "https://archive.org/download/art_of_war_librivox/art_of_war_01-02_sun_tzu_64kb.mp3",
+     "note": "Laying plans, and waging war"},
+    {"title": "Marcus Aurelius - Meditations, book 2",
+     "audio_url": "https://archive.org/download/themeditationsofmarcusaurelius_1801_librivox/meditationsofmarcusaurelius_02_aurelius_64kb.mp3",
+     "note": "Short, dense, endlessly quotable"},
+    {"title": "Einstein - Relativity, ch. 10-12",
+     "audio_url": "https://archive.org/download/relativity_librivox/relativity_10-12_einstein_64kb.mp3",
+     "note": "Carries on from the shipped chapter"},
+    {"title": "Aesop - Fables, volume one",
+     "audio_url": "https://archive.org/download/aesop_fables_volume_one_librivox/fables_01_00_aesop_64kb.mp3",
+     "note": "Many small stories, one file"},
+]
+
+# One person adding books is a handful an hour -- a judge trying every
+# suggestion and two of their own is six. Anything well past this is someone
+# running up a transcription bill on a key that is not theirs.
+RATE_PER_HOUR = 12
+
+
+def _client_id(request: Request) -> str:
+    """A random string the browser keeps in localStorage. Scopes a shelf so one
+    visitor's books do not appear on another's; not a credential."""
+    raw = (request.headers.get("x-client-id") or "").strip()
+    return re.sub(r"[^A-Za-z0-9_-]", "", raw)[:48]
+
+
+def _rate_limit(request: Request) -> None:
+    """Per-IP ceiling on new books.
+
+    The endpoint is unauthenticated by design -- there are no accounts -- so
+    the thing that needs protecting is the transcription spend behind it.
+    Called only once a link has passed validation: a rejected paste costs us
+    one HEAD request, and charging someone's quota for a typo is just rude.
+    """
+    ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or "unknown"
+    try:
+        n = playheads.kv_incr(f"echoread:rate:{ip}", 3600)
+    except Exception as exc:
+        print(f"[rate] check failed, allowing: {exc}")
+        return
+    if n > RATE_PER_HOUR:
+        raise HTTPException(429, f"That's {RATE_PER_HOUR} books in an hour from this "
+                                 f"address, which is the limit here. Try again later.")
+
+
 @app.get("/api/books")
-def list_books():
-    """The shelf: the shipped book first, then whatever has been added."""
-    return {"books": [_builtin_card()] + books.shelf(playheads)}
+def list_books(request: Request):
+    """The shipped book, then this browser's own, then things worth trying."""
+    return {"books": [_builtin_card()] + books.shelf(playheads, _client_id(request)),
+            "suggested": SUGGESTED}
 
 
 @app.post("/api/books")
-def add_book(new: NewBook):
+def add_book(new: NewBook, request: Request):
     """Start indexing a book from a URL.
 
     Returns as soon as the transcription job is queued. The browser then polls
@@ -292,10 +344,16 @@ def add_book(new: NewBook):
     if not AAI_KEY:
         raise HTTPException(500, "ASSEMBLYAI_API_KEY is not set on this deployment.")
     url = new.audio_url.strip()
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(400, "That needs to be a direct https link to an audio file.")
     try:
-        rec = books.create(playheads, new.title or _title_from_url(url), url, AAI_KEY)
+        # Checked before anything is fetched or queued: this runs from our own
+        # server, so an unvalidated link is a request forgery, and an unbounded
+        # one is someone else's transcription bill.
+        books.check_source(url)
+        _rate_limit(request)
+        rec = books.create(playheads, new.title or _title_from_url(url), url,
+                           AAI_KEY, _client_id(request))
+    except books.RejectedURL as e:
+        raise HTTPException(400, str(e))
     except urllib.error.HTTPError as e:
         detail = e.read().decode()[:200]
         raise HTTPException(400, f"AssemblyAI could not take that link: {detail}")
@@ -313,6 +371,7 @@ async def upload_book(request: Request):
     """
     if not AAI_KEY:
         raise HTTPException(500, "ASSEMBLYAI_API_KEY is not set on this deployment.")
+    _rate_limit(request)
     title = request.headers.get("x-book-title", "") or "Uploaded book"
     raw = await request.body()
     if not raw:
@@ -321,7 +380,7 @@ async def upload_book(request: Request):
         raise HTTPException(413, "That file is too big to upload here - paste a link to it instead.")
     try:
         url = books.upload_bytes(raw, AAI_KEY)
-        rec = books.create(playheads, title, url, AAI_KEY)
+        rec = books.create(playheads, title, url, AAI_KEY, _client_id(request))
     except urllib.error.HTTPError as e:
         raise HTTPException(400, f"Upload failed: {e.read().decode()[:200]}")
     # The browser plays its own local copy; this URL is AssemblyAI-only.

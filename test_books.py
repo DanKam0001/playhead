@@ -185,11 +185,37 @@ assert all(c.start_s <= 500.0 for c in capped), [c.start_s for c in capped]
 assert probe not in [c.id for c in capped], "spoiler cap let a later chunk through"
 print(f"PASS spoiler cap held: {len(capped)} hits, all before 08:20")
 
-# the shelf
-store.kv_push("echoread:books", "testbook")
-names = [b["title"] for b in books.shelf(store)]
-assert "Test" in names, names
-print("PASS shelf lists the book:", names)
+# the shelf is scoped to a client, not shared
+store.kv_push(books._shelf_key("client-a"), "testbook")
+assert [b["title"] for b in books.shelf(store, "client-a")] == ["Test"]
+assert books.shelf(store, "client-b") == [], "one client can see another's books"
+print("PASS shelf is per client, not global")
+
+# --- the URL guard ---
+for bad, why in [
+    ("ftp://example.com/a.mp3", "scheme"),
+    ("http://127.0.0.1/a.mp3", "loopback"),
+    ("http://169.254.169.254/latest/meta-data/", "cloud metadata"),
+    ("http://localhost:8199/a.mp3", "localhost"),
+    ("http://10.0.0.5/a.mp3", "private range"),
+]:
+    try:
+        books.check_source(bad)
+    except books.RejectedURL:
+        pass
+    else:
+        raise AssertionError(f"check_source allowed {why}: {bad}")
+print("PASS url guard refused scheme, loopback, metadata, localhost, private range")
+
+# a real public audio link still passes, when there is a network to check it on
+try:
+    info = books.check_source(
+        "https://archive.org/download/art_of_war_librivox/art_of_war_01-02_sun_tzu_64kb.mp3")
+    print(f"PASS url guard allowed a real LibriVox link ({info['bytes'] / 1e6:.1f} MB)")
+except books.RejectedURL as exc:
+    raise AssertionError(f"guard rejected a legitimate link: {exc}")
+except Exception as exc:
+    print(f"SKIP live URL check (no network): {exc}")
 
 print()
 print("ALL REDIS BOOK TESTS PASSED")
