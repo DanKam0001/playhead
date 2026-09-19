@@ -1,0 +1,167 @@
+{
+ "id": "5fcd847e-cd42-4335-8429-6a42d435e169",
+ "text": "This is a LibriVox recording. All LibriVox recordings are in the public domain. For more information or to volunteer, please visit librivox.org. Recording by Peter Eastman, July 30th, 2006. Relativity: The Special and General Theory by Albert Einstein. Continuing part 1, section 7: The apparent incompatibility of the law of propagation of light with the principle of relativity. There is hardly a simpler law in physics than that according to which light is propagated in empty space. Every child at school knows, or believes he knows, that that this propagation takes place in straight lines with the velocity c equals 300,000 kilometers per second. At all events, we know with great exactness that this velocity is the same for all colors, because if this were not the case, the minimum of emission would not be observed simultaneously for different colors during the eclipse of a fixed star by its dark neighbor. By means of similar considerations, based on observations of double stars, the Dutch astronomer de Sitter was also able to show that the velocity of propagation of light cannot depend on the velocity of motion of the body emitting the light. The assumption that this velocity of propagation is dependent on the direction in space is in itself improbable. In short, let us assume that the simple law of the constancy of the velocity of light, c, in vacuum, is justifiably believed by the child at school. Who would imagine that this simple law has plunged the conscientiously thoughtful physicist into the greatest intellectual difficulties? Let us consider how these difficulties arise. Of course, we must refer the process of the propagation of light, and indeed every other process, to a rigid reference body coordinate system. As such a system, let us again choose our embankment. We shall imagine the air above it to have been removed. If a ray of light be sent along the embankment, we see from the above that the tip of the ray will be transmitted with the velocity c relative to the embankment. Now, let us suppose that our railway carriage is again traveling along the railway lines with the velocity v, and that its direction is the same as that of the ray of light, but its velocity of course much less. Let us inquire about the velocity of propagation of the ray of light relative to the carriage. It is obvious that we can here apply the consideration of the previous section, since the ray of light plays the part of the man walking along relatively to the carriage. The velocity capital W of the man relative to the embankment is here replaced by the velocity of light relative to the embankment. W is the required velocity of light with respect to the carriage, and we have w equals c minus v. The velocity of propagation of a ray of light relative to the carriage thus comes out smaller than c. But this result comes into conflict with the principle of relativity set forth in Section 5, for like every other general law of nature, the law of the transmission of light in vacuo must, according to the principle of relativity, be the same for the railway carriage as reference body as when the rails are the body of reference. But from our above consideration, this would appear to be impossible. If every ray of light is propagated relative to the embankment with the velocity c, then for this reason it would appear that another law of propagation of light must necessarily hold with respect to the carriage, a result contradictory to the principle of relativity. In view of this dilemma, there appears to be nothing else for it than to abandon either the principle of relativity or the simple law of the propagation of light in vacuo. Those of you who have carefully followed the preceding discussion are almost sure to expect that we should retain the principle of relativity, which appeals so convincingly to the intellect because it is so natural and simple. The law of the propagation of light in vacuo would then have to be replaced by a more complicated law conformable to the principle of relativity. The development of theoretical physics shows, however, that we cannot pursue this course. The epoch-making theoretical investigations of H.A. Lorentz on the electrodynamical and optical phenomena connected with moving bodies show that experience in this domain leads conclusively to a theory of electromagnetic phenomena of which the law of the constancy of the velocity of light in vacuo is a necessary consequence. Prominent theoretical physicists were therefore more inclined to reject the principle of relativity, in spite of the fact that no empirical data had been found which were contradictory to this principle. At this juncture, the theory of relativity entered the arena. As a result of an analysis of the physical conceptions of time and space it became evident that in reality there is not the least incompatibility between the principle of relativity and the law of propagation of light, and that by systematically holding fast to both these laws, a logically rigid theory could be arrived at. This theory has been called the special theory of relativity, to distinguish it from the extended theory, with which we shall deal later. In the following pages, we shall present the fundamental ideas of the special theory of relativity. End of Section 7. Section 8: On the Idea of Time in Physics. Lightning has struck the rails on our railway embankment 2 places, A and B, far distant from each other. I make the additional assertion that these 2 lightning flashes occurred simultaneously. If I ask you whether there is sense in this statement, you will answer my question with a decided yes. But if I now approach you with a request to explain to me the sense of the statement more precisely, You find after some consideration that the answer to this question is not so easy as it appears at first sight. After some time, perhaps the following answer would occur to you: The significance of the statement is clear in itself and needs no further explanation. Of course, it would require some consideration if I were to be commissioned to determine by observations whether in the actual case the 2 events took place simultaneously or not. I cannot be satisfied with this answer for the following reason. Supposing that as a result of ingenious considerations, an able meteorologist were to discover that the lightning must always strike the places A and B simultaneously, then we should be faced with the task of testing whether or not this theoretical result is in accordance with the reality. We encounter the same difficulty with all physical statements in which the conception simultaneous plays a part. The concept does not exist for the physicist until he has the possibility of discovering whether or not it is fulfilled in an actual case. We thus require a definition of simultaneity such that this definition supplies us with the method by means of which, in the present case, he can decide by experiment whether or not both the lightning strokes occurred simultaneously. As long as this requirement is not satisfied, I allow myself to be deceived as a physicist, and a Of course, the same applies if I am not a physicist, when I imagine that I am able to attach a meaning to the statement of simultaneity. I would ask the reader not to proceed farther until he is fully convinced on this point. After thinking the matter over for some time, you then offer the following suggestion with which to test simultaneity. By measuring along the rails, the connecting line AB should be measured up, and an observer placed at the midpoint M of the distance AB. This observer should be supplied with an arrangement, e.g., 2 mirrors inclined at 90 degrees, which allows him visually to observe both places A and B at the same time. If the observer perceives the 2 flashes of lightning at the same time, then they are simultaneous. I am very pleased with the suggestion, but for all that I cannot regard the matter as quite settled, because I feel constrained to raise the following objection. Your definition would certainly be right if only I knew that the light by means of which the observer at M perceives the lightning flashes travels along the length a A to M with the same velocity as along the length B to M. But an examination of this supposition would only be possible if we already had at our disposal the means of measuring time. It would thus appear as though we were moving here in a logical circle. After further consideration, you cast a somewhat disdainful glance at me. And rightly so. And you declare, I maintain my previous definition nevertheless, because in reality it assumes absolutely nothing about light. There is only one demand to be made of the definition of simultaneity\u2014 namely, that in every real case it must supply us with an empirical decision as to whether or not the conception that has to be defined is fulfilled. That my definition satisfies this demand is indisputable. That light requires the same time to traverse the path A to M as for the path B to M is in reality neither a supposition nor a hypothesis about the physical nature of light, but a stipulation which I can make of my own free will in order to arrive at a definition simultaneity. It is clear that this definition can be used to give an exact meaning not only to 2 events, but to as many events as we care to choose, and independently of the positions of the scenes of the events with respect to the body of reference\u2014 here, the railway embankment. Footnote: We suppose further that when 3 events, A, B, and C, occur in different places in such a manner that A is simultaneous with B, and B is simultaneous with C\u2014 simultaneous in the sense of the above definition\u2014 then the criterion for the simultaneity of the pair of events A, C is also satisfied. This assumption is a physical hypothesis about the propagation of light. It must certainly be fulfilled if we are to maintain the law of the constancy of the velocity of light in vacuo. End of footnote. We are thus led also to a definition of time in physics. For this purpose, we suppose that clocks of identical construction are placed at the points A, B, and C of the railway line. Coordinate system, and that they are set in such a manner that the positions of their pointers are simultaneously, in the above sense, the same. Under these conditions, we understand by the time of an event the reading position of the hands of that one of these clocks which is in the immediate vicinity in space of the event. In this manner, a time value is associated with every event which is essentially capable of observation. This stipulation contains a further physical hypothesis, the validity of which will hardly be doubted without empirical evidence to the contrary. It has been assumed that all these clocks go at the same rate. If they are of identical construction. Stated more exactly, when 2 clocks arranged at rest in different places of a reference body are set in such a manner that a particular position of the pointers of the one clock is simultaneous, in the above sense, with the same position of the pointers of the other clock, then identical settings are always simultaneous. In the sense of the above definition. End of Section 8. Section 9: The Relativity of Simultaneity. Up to now, our considerations have been referred to a particular body of reference which we have styled a railway embankment. We suppose a very long train traveling along the rails with a constant velocity v, and in the direction indicated in Figure 1. People traveling in this train will, with advantage, view the train as a rigid reference body coordinate system. They regard all events in reference to the train. Then, every event which takes place along the line also takes place at a particular point of the train. Also, the definition of simultaneity can be given relative to the train in exactly the same way as with respect to the embankment. As a natural consequence, however, the following question arises: are 2 events, e.g., the 2 strokes of lightning A and B, which are simultaneous with reference to the railway embankment, also simultaneous relatively to the train? We shall show directly that the answer must be in the negative. When we say that the lightning strokes A and B are simultaneous with respect to the embankment, we mean the rays of light emitted at the places A and B where the lightning occurs meet each other at the midpoint M of the length A to B of the embankment. But the events A and B also correspond to positions A and B on the train. Let M prime be the midpoint of the distance A to B on the traveling train. Just when the flashes, as judged from the embankment, of lightning occur, This point M prime naturally coincides with the point M, but it moves toward the right in the diagram with the velocity v of the train. If an observer sitting at the position M prime in the train did not possess this velocity, then he would remain permanently at M, and the light rays emitted by the flashes of lightning A and B would reach him simultaneously, i.e., they would meet just where he is situated. Now, in reality, considered with reference to the railway embankment, he is hastening towards the beam of light coming from B whilst he is riding on ahead of the beam of light coming from A. Hence, the observer will see the beam of light emitted from B earlier than he will see that emitted from A. Observers who take the railway train as the reference body must therefore come to the conclusion that the lightning flash B took place earlier than the lightning flash A. We thus arrive at an important result: events which are simultaneous with reference to the embankment are not simultaneous with respect to the train, and vice versa. Relativity of simultaneity. Every reference body coordinate system has its own particular time. Unless we are told the reference body to which the statement of time refers, there is no meaning in a statement of the time of an event. Now, before the advent of the theory of relativity, it had always tacitly been assumed in physics that the statement of time had an absolute significance, i.e., that it is independent of the state of motion of the body of reference. But we have just seen that this assumption is incompatible with the most natural definition of simultaneity. If we discard this assumption, then the conflict between the law of the propagation of light in vacuo, the principle of relativity developed in Section 7 disappears. We were led to that conflict by the considerations of Section 6, which are now no longer tenable. In that section, we concluded that the man in the carriage who traverses the distance w per second relative to the carriage traverses the same distance all with respect to the embankment in each second of time. But according to the foregoing considerations, the time required by a particular occurrence with respect to the carriage must not be considered equal to the duration of the same occurrence as judged from the embankment as reference body. Hence it cannot be contended that the man in walking is travels the distance w relative to the railway line in a time which is equal to 1 second as judged from the embankment. Moreover, the considerations of Section 6 are based on yet a second assumption, which in the light of a strict consideration appears to be arbitrary, although it was always tacitly made even before the introduction of the theory of relativity. End of Section 9.",
+ "audio_duration": 1234,
+ "paragraphs": [
+  {
+   "text": "This is a LibriVox recording. All LibriVox recordings are in the public domain. For more information or to volunteer, please visit librivox.org.",
+   "start": 986,
+   "end": 12656
+  },
+  {
+   "text": "Recording by Peter Eastman, July 30th, 2006. Relativity: The Special and General Theory by Albert Einstein. Continuing part 1, section 7: The apparent incompatibility of the law of propagation of light with the principle of relativity.",
+   "start": 14816,
+   "end": 37559
+  },
+  {
+   "text": "There is hardly a simpler law in physics than that according to which light is propagated in empty space. Every child at school knows, or believes he knows, that that this propagation takes place in straight lines with the velocity c equals 300,000 kilometers per second. At all events, we know with great exactness that this velocity is the same for all colors, because if this were not the case, the minimum of emission would not be observed simultaneously for different colors during the eclipse of a fixed star by its dark neighbor. By means of similar considerations, based on observations of double stars, the Dutch astronomer de Sitter was also able to show that the velocity of propagation of light cannot depend on the velocity of motion of the body emitting the light. The assumption that this velocity of propagation is dependent on the direction in space is in itself improbable.",
+   "start": 40636,
+   "end": 103058
+  },
+  {
+   "text": "In short, let us assume that the simple law of the constancy of the velocity of light, c, in vacuum, is justifiably believed by the child at school. Who would imagine that this simple law has plunged the conscientiously thoughtful physicist into the greatest intellectual difficulties? Let us consider how these difficulties arise.",
+   "start": 104760,
+   "end": 128266
+  },
+  {
+   "text": "Of course, we must refer the process of the propagation of light, and indeed every other process, to a rigid reference body coordinate system. As such a system, let us again choose our embankment. We shall imagine the air above it to have been removed. If a ray of light be sent along the embankment, we see from the above that the tip of the ray will be transmitted with the velocity c relative to the embankment. Now, let us suppose that our railway carriage is again traveling along the railway lines with the velocity v, and that its direction is the same as that of the ray of light, but its velocity of course much less.",
+   "start": 130288,
+   "end": 175691
+  },
+  {
+   "text": "Let us inquire about the velocity of propagation of the ray of light relative to the carriage. It is obvious that we can here apply the consideration of the previous section, since the ray of light plays the part of the man walking along relatively to the carriage. The velocity capital W of the man relative to the embankment is here replaced by the velocity of light relative to the embankment. W is the required velocity of light with respect to the carriage, and we have w equals c minus v. The velocity of propagation of a ray of light relative to the carriage thus comes out smaller than c. But this result comes into conflict with the principle of relativity set forth in Section 5, for like every other general law of nature, the law of the transmission of light in vacuo must, according to the principle of relativity, be the same for the railway carriage as reference body as when the rails are the body of reference. But from our above consideration, this would appear to be impossible.",
+   "start": 177412,
+   "end": 252087
+  },
+  {
+   "text": "If every ray of light is propagated relative to the embankment with the velocity c, then for this reason it would appear that another law of propagation of light must necessarily hold with respect to the carriage, a result contradictory to the principle of relativity.",
+   "start": 253291,
+   "end": 271077
+  },
+  {
+   "text": "In view of this dilemma, there appears to be nothing else for it than to abandon either the principle of relativity or the simple law of the propagation of light in vacuo. Those of you who have carefully followed the preceding discussion are almost sure to expect that we should retain the principle of relativity, which appeals so convincingly to the intellect because it is so natural and simple. The law of the propagation of light in vacuo would then have to be replaced by a more complicated law conformable to the principle of relativity.",
+   "start": 273696,
+   "end": 310784
+  },
+  {
+   "text": "The development of theoretical physics shows, however, that we cannot pursue this course. The epoch-making theoretical investigations of H.A. Lorentz on the electrodynamical and optical phenomena connected with moving bodies show that experience in this domain leads conclusively to a theory of electromagnetic phenomena of which the law of the constancy of the velocity of light in vacuo is a necessary consequence. Prominent theoretical physicists were therefore more inclined to reject the principle of relativity, in spite of the fact that no empirical data had been found which were contradictory to this principle.",
+   "start": 312878,
+   "end": 354183
+  },
+  {
+   "text": "At this juncture, the theory of relativity entered the arena. As a result of an analysis of the physical conceptions of time and space it became evident that in reality there is not the least incompatibility between the principle of relativity and the law of propagation of light, and that by systematically holding fast to both these laws, a logically rigid theory could be arrived at. This theory has been called the special theory of relativity, to distinguish it from the extended theory, with which we shall deal later. In the following pages, we shall present the fundamental ideas of the special theory of relativity.",
+   "start": 356804,
+   "end": 402444
+  },
+  {
+   "text": "End of Section 7.",
+   "start": 404898,
+   "end": 406058
+  },
+  {
+   "text": "Section 8: On the Idea of Time in Physics.",
+   "start": 409411,
+   "end": 414676
+  },
+  {
+   "text": "Lightning has struck the rails on our railway embankment 2 places, A and B, far distant from each other. I make the additional assertion that these 2 lightning flashes occurred simultaneously. If I ask you whether there is sense in this statement, you will answer my question with a decided yes. But if I now approach you with a request to explain to me the sense of the statement more precisely, You find after some consideration that the answer to this question is not so easy as it appears at first sight.",
+   "start": 416930,
+   "end": 456755
+  },
+  {
+   "text": "After some time, perhaps the following answer would occur to you: The significance of the statement is clear in itself and needs no further explanation. Of course, it would require some consideration if I were to be commissioned to determine by observations whether in the actual case the 2 events took place simultaneously or not. I cannot be satisfied with this answer for the following reason. Supposing that as a result of ingenious considerations, an able meteorologist were to discover that the lightning must always strike the places A and B simultaneously, then we should be faced with the task of testing whether or not this theoretical result is in accordance with the reality. We encounter the same difficulty with all physical statements in which the conception simultaneous plays a part.",
+   "start": 458992,
+   "end": 518349
+  },
+  {
+   "text": "The concept does not exist for the physicist until he has the possibility of discovering whether or not it is fulfilled in an actual case. We thus require a definition of simultaneity such that this definition supplies us with the method by means of which, in the present case, he can decide by experiment whether or not both the lightning strokes occurred simultaneously. As long as this requirement is not satisfied, I allow myself to be deceived as a physicist, and a Of course, the same applies if I am not a physicist, when I imagine that I am able to attach a meaning to the statement of simultaneity. I would ask the reader not to proceed farther until he is fully convinced on this point.",
+   "start": 519596,
+   "end": 571546
+  },
+  {
+   "text": "After thinking the matter over for some time, you then offer the following suggestion with which to test simultaneity. By measuring along the rails, the connecting line AB should be measured up, and an observer placed at the midpoint M of the distance AB. This observer should be supplied with an arrangement, e.g., 2 mirrors inclined at 90 degrees, which allows him visually to observe both places A and B at the same time. If the observer perceives the 2 flashes of lightning at the same time, then they are simultaneous.",
+   "start": 574177,
+   "end": 613671
+  },
+  {
+   "text": "I am very pleased with the suggestion, but for all that I cannot regard the matter as quite settled, because I feel constrained to raise the following objection. Your definition would certainly be right if only I knew that the light by means of which the observer at M perceives the lightning flashes travels along the length a A to M with the same velocity as along the length B to M. But an examination of this supposition would only be possible if we already had at our disposal the means of measuring time. It would thus appear as though we were moving here in a logical circle.",
+   "start": 615708,
+   "end": 656160
+  },
+  {
+   "text": "After further consideration, you cast a somewhat disdainful glance at me. And rightly so. And you declare, I maintain my previous definition nevertheless, because in reality it assumes absolutely nothing about light. There is only one demand to be made of the definition of simultaneity\u2014 namely, that in every real case it must supply us with an empirical decision as to whether or not the conception that has to be defined is fulfilled. That my definition satisfies this demand is indisputable.",
+   "start": 658802,
+   "end": 698927
+  },
+  {
+   "text": "That light requires the same time to traverse the path A to M as for the path B to M is in reality neither a supposition nor a hypothesis about the physical nature of light, but a stipulation which I can make of my own free will in order to arrive at a definition simultaneity. It is clear that this definition can be used to give an exact meaning not only to 2 events, but to as many events as we care to choose, and independently of the positions of the scenes of the events with respect to the body of reference\u2014 here, the railway embankment. Footnote: We suppose further that when 3 events, A, B, and C, occur in different places in such a manner that A is simultaneous with B, and B is simultaneous with C\u2014 simultaneous in the sense of the above definition\u2014 then the criterion for the simultaneity of the pair of events A, C is also satisfied. This assumption is a physical hypothesis about the propagation of light. It must certainly be fulfilled if we are to maintain the law of the constancy of the velocity of light in vacuo.",
+   "start": 699778,
+   "end": 782629
+  },
+  {
+   "text": "End of footnote.",
+   "start": 784086,
+   "end": 784741
+  },
+  {
+   "text": "We are thus led also to a definition of time in physics. For this purpose, we suppose that clocks of identical construction are placed at the points A, B, and C of the railway line. Coordinate system, and that they are set in such a manner that the positions of their pointers are simultaneously, in the above sense, the same. Under these conditions, we understand by the time of an event the reading position of the hands of that one of these clocks which is in the immediate vicinity in space of the event. In this manner, a time value is associated with every event which is essentially capable of observation.",
+   "start": 786803,
+   "end": 833936
+  },
+  {
+   "text": "This stipulation contains a further physical hypothesis, the validity of which will hardly be doubted without empirical evidence to the contrary. It has been assumed that all these clocks go at the same rate. If they are of identical construction. Stated more exactly, when 2 clocks arranged at rest in different places of a reference body are set in such a manner that a particular position of the pointers of the one clock is simultaneous, in the above sense, with the same position of the pointers of the other clock, then identical settings are always simultaneous. In the sense of the above definition.",
+   "start": 836890,
+   "end": 881804
+  },
+  {
+   "text": "End of Section 8.",
+   "start": 884829,
+   "end": 886167
+  },
+  {
+   "text": "Section 9: The Relativity of Simultaneity.",
+   "start": 889506,
+   "end": 893974
+  },
+  {
+   "text": "Up to now, our considerations have been referred to a particular body of reference which we have styled a railway embankment. We suppose a very long train traveling along the rails with a constant velocity v, and in the direction indicated in Figure 1. People traveling in this train will, with advantage, view the train as a rigid reference body coordinate system. They regard all events in reference to the train. Then, every event which takes place along the line also takes place at a particular point of the train.",
+   "start": 896080,
+   "end": 937599
+  },
+  {
+   "text": "Also, the definition of simultaneity can be given relative to the train in exactly the same way as with respect to the embankment. As a natural consequence, however, the following question arises: are 2 events, e.g., the 2 strokes of lightning A and B, which are simultaneous with reference to the railway embankment, also simultaneous relatively to the train? We shall show directly that the answer must be in the negative.",
+   "start": 938897,
+   "end": 971821
+  },
+  {
+   "text": "When we say that the lightning strokes A and B are simultaneous with respect to the embankment, we mean the rays of light emitted at the places A and B where the lightning occurs meet each other at the midpoint M of the length A to B of the embankment. But the events A and B also correspond to positions A and B on the train. Let M prime be the midpoint of the distance A to B on the traveling train. Just when the flashes, as judged from the embankment, of lightning occur, This point M prime naturally coincides with the point M, but it moves toward the right in the diagram with the velocity v of the train. If an observer sitting at the position M prime in the train did not possess this velocity, then he would remain permanently at M, and the light rays emitted by the flashes of lightning A and B would reach him simultaneously, i.e., they would meet just where he is situated.",
+   "start": 974506,
+   "end": 1043294
+  },
+  {
+   "text": "Now, in reality, considered with reference to the railway embankment, he is hastening towards the beam of light coming from B whilst he is riding on ahead of the beam of light coming from A. Hence, the observer will see the beam of light emitted from B earlier than he will see that emitted from A. Observers who take the railway train as the reference body must therefore come to the conclusion that the lightning flash B took place earlier than the lightning flash A. We thus arrive at an important result: events which are simultaneous with reference to the embankment are not simultaneous with respect to the train, and vice versa. Relativity of simultaneity.",
+   "start": 1044656,
+   "end": 1092442
+  },
+  {
+   "text": "Every reference body coordinate system has its own particular time. Unless we are told the reference body to which the statement of time refers, there is no meaning in a statement of the time of an event.",
+   "start": 1093672,
+   "end": 1107747
+  },
+  {
+   "text": "Now, before the advent of the theory of relativity, it had always tacitly been assumed in physics that the statement of time had an absolute significance, i.e., that it is independent of the state of motion of the body of reference. But we have just seen that this assumption is incompatible with the most natural definition of simultaneity. If we discard this assumption, then the conflict between the law of the propagation of light in vacuo, the principle of relativity developed in Section 7 disappears. We were led to that conflict by the considerations of Section 6, which are now no longer tenable. In that section, we concluded that the man in the carriage who traverses the distance w per second relative to the carriage traverses the same distance all with respect to the embankment in each second of time.",
+   "start": 1110521,
+   "end": 1175167
+  },
+  {
+   "text": "But according to the foregoing considerations, the time required by a particular occurrence with respect to the carriage must not be considered equal to the duration of the same occurrence as judged from the embankment as reference body. Hence it cannot be contended that the man in walking is travels the distance w relative to the railway line in a time which is equal to 1 second as judged from the embankment. Moreover, the considerations of Section 6 are based on yet a second assumption, which in the light of a strict consideration appears to be arbitrary, although it was always tacitly made even before the introduction of the theory of relativity.",
+   "start": 1176722,
+   "end": 1224709
+  },
+  {
+   "text": "End of Section 9.",
+   "start": 1227642,
+   "end": 1229478
+  }
+ ]
+}

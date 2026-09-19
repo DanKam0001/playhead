@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EchoRead</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --ground:#11141a; --surface:#191d26; --line:#2a3039;
+    --ink:#e6e9ee; --muted:#8e97a6; --accent:#88a9e4; --signal:#d9a24a;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh; background:var(--ground); color:var(--ink);
+    font-family:"IBM Plex Sans",system-ui,sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+    padding:48px 20px 64px;
+  }
+  .wrap{width:100%; max-width:720px}
+  h1{font-family:Spectral,Georgia,serif; font-weight:600; font-size:38px;
+     margin:0 0 6px; letter-spacing:-.01em}
+  .tagline{color:var(--muted); margin:0 0 4px; font-size:17px}
+  .bookname{color:var(--muted); font-size:13px; margin:0 0 28px;
+            font-family:"IBM Plex Mono",monospace}
+
+  .panel{background:var(--surface); border:1px solid var(--line);
+         border-radius:8px; padding:22px; margin-bottom:18px}
+
+  .transport{display:flex; align-items:center; gap:16px; flex-wrap:wrap}
+  button{
+    font:500 15px/1 "IBM Plex Sans",sans-serif; color:#101319;
+    background:var(--accent); border:0; border-radius:5px;
+    padding:12px 22px; cursor:pointer;
+  }
+  button:disabled{opacity:.45; cursor:default}
+  button:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
+  #clock{font-family:"IBM Plex Mono",monospace; font-size:15px;
+         font-variant-numeric:tabular-nums; color:var(--muted)}
+  audio{flex:1; min-width:220px; height:36px}
+
+  #status{
+    font-family:"IBM Plex Mono",monospace; font-size:12px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--muted);
+    display:flex; align-items:center; gap:8px; margin-top:14px;
+  }
+  #status::before{
+    content:""; width:8px; height:8px; border-radius:50%;
+    background:var(--muted); flex:none;
+  }
+  #status[data-state="live"]{color:var(--signal)}
+  #status[data-state="live"]::before{background:var(--signal)}
+  #status[data-state="busy"]{color:var(--accent)}
+  #status[data-state="busy"]::before{background:var(--accent)}
+  #status[data-state="error"]{color:#e2827c}
+  #status[data-state="error"]::before{background:#e2827c}
+
+  body.listening .panel{border-color:var(--signal)}
+
+  #transcript{min-height:210px; max-height:46vh; overflow-y:auto}
+  .line{margin:0 0 14px; font-size:16px; line-height:1.55}
+  .line .who{
+    display:block; font-family:"IBM Plex Mono",monospace; font-size:11px;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--muted);
+    margin-bottom:3px;
+  }
+  .line.echoread{font-family:Spectral,Georgia,serif; font-size:17.5px}
+  .line.echoread .who{color:var(--accent)}
+  .line.partial{opacity:.55}
+  .empty{color:var(--muted); font-size:15px; margin:0}
+
+  .hint{color:var(--muted); font-size:13.5px; line-height:1.6; margin:0}
+  .hint b{color:var(--ink); font-weight:500}
+  details summary{cursor:pointer; color:var(--muted); font-size:13px;
+                  font-family:"IBM Plex Mono",monospace; letter-spacing:.05em}
+  details summary:focus-visible{outline:2px solid var(--signal); outline-offset:3px}
+  #log{margin:12px 0 0; max-height:200px; overflow:auto; white-space:pre-wrap;
+       font-family:"IBM Plex Mono",monospace; font-size:11.5px; line-height:1.7;
+       color:var(--muted)}
+  .hint code{font-family:"IBM Plex Mono",monospace; font-size:12.5px;
+             background:#11141a; padding:1px 5px; border-radius:3px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>EchoRead</h1>
+  <p class="tagline">Interrupt the audiobook. Ask about what you just heard.</p>
+  <p class="bookname">Einstein &middot; Relativity: The Special and General Theory &middot; &sect;7&ndash;9</p>
+
+  <div class="panel">
+    <div class="transport">
+      <button id="start">Start listening</button>
+      <audio id="book" src="/audio/relativity.mp3" preload="auto" controls></audio>
+      <span id="clock">00:00</span>
+    </div>
+    <div id="status" data-state="idle">not connected</div>
+  </div>
+
+  <div class="panel" id="transcript">
+    <p class="empty">Press start, let it play, then just talk over it.</p>
+  </div>
+
+  <div class="panel">
+    <details>
+      <summary>Event log</summary>
+      <pre id="log"></pre>
+    </details>
+  </div>
+
+  <div class="panel">
+    <p class="hint">
+      Try <b>&ldquo;wait, what did that last part mean?&rdquo;</b> &mdash; the question
+      names no topic, so it can&rsquo;t be searched for. EchoRead answers it from
+      <b>where you are in the audio</b>, not from the words you said.<br><br>
+      Ask <b>&ldquo;so are two events simultaneous or not?&rdquo;</b> before the nine-minute
+      mark and it will decline to skip ahead. Say <code>carry on</code> to resume.
+    </p>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

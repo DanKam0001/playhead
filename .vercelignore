@@ -1,0 +1,15 @@
+.venv/
+/audio/
+__pycache__/
+*.pyc
+smoke_test.py
+probe_*.py
+bench_latency.py
+mic_check.py
+compare_rag.py
+ask.py
+run_demo.py
+make_demo_audiobook.py
+build_index.py
+check_keys.py
+data/*.transcript.json

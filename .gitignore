@@ -1,0 +1,19 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.vercel
+
+# Working audio. The committed copy of the book lives in public/audio/ (that is
+# what Vercel serves); audio/ is scratch space for building an index.
+# Leading slash matters: a bare 'audio/' also swallows public/audio/.
+/audio/
+
+# Scratch indexes. data/relativity.* is committed so a clone runs as-is.
+data/chroma/
+data/chapter4.*
+data/_*
+
+# Internal planning doc: hackathon strategy, competitor notes, judging analysis.
+# Stays local — CLAUDE.md carries the engineering context that belongs in public.
+PROGRESS.md

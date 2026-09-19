@@ -1,0 +1,6 @@
+# Deployed web app only. Local tooling lives in requirements-dev.txt.
+fastapi==0.118.0
+pydantic==2.11.10
+numpy==2.1.3
+google-genai==1.38.0
+python-dotenv==1.1.1
