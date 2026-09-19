@@ -70,7 +70,7 @@ Two details worth knowing:
   the browser advances the job one bounded step — check the transcript, or embed
   the next hundred chunks — and writes down where it got to. That is also where
   the progress percentage comes from, instead of a spinner that means nothing.
-- **Uploads stop at 4 MB, links do not.** The platform caps a request body, so
+- **Uploads stop at a configurable ceiling; links do not.** The platform caps a request body, so
   the upload path is for a chapter or an episode. The page checks the size before
   sending and points you at the link form, rather than failing at the edge.
 
@@ -174,6 +174,22 @@ against ~2200 ms for the model call it feeds. A vector DB would have added
 
 ## Measured
 
+Real numbers from the live deployment, not estimates.
+
+| | |
+|---|---|
+| 47-minute book (45.7 MB) | transcribed **and** indexed in **45 s** end to end |
+| 35-minute book | 52 passages, ready in ~50 s |
+| Window lookup (every question) | ~3 ms locally, ~1.8 s round trip through the agent |
+| Vector search, 2000 chunks (11 h) | **43 ms** |
+| Vector search, 8000 chunks (44 h) | **85 ms**, index loads in 144 ms |
+| Index size | 1.5 KB per chunk — a 10-hour book is ~3 MB |
+
+The retrieval layer is not the limit. `tests/test_scale.py -m slow` prints the
+table; a 44-hour book still searches in under a tenth of a second, which is
+what justified brute-force cosine over a vector database.
+
+
 - Einstein chapter: **20.6 min → 23 chunks**, median 50 s / 630 chars
 - Brute-force cosine: **1.3 ms** for 1800 chunks × 3072-d
 - Demo book: LibriVox *Relativity: The Special and General Theory*, §7–9 — public domain
@@ -219,7 +235,7 @@ into the repo the way the shipped book is:
 ```bash
 python build_index.py path/to/book.mp3     # transcribe + chunk + embed to data/
 python compare_rag.py                      # position-first vs naive RAG
-python test_books.py                       # the user-book path, no keys required
+pytest                                     # the full suite, no keys required
 ```
 
 ## Layout
@@ -234,7 +250,7 @@ python test_books.py                       # the user-book path, no keys require
 | `playhead/library.py` | The retrieval core — time window, capped semantic search |
 | `build_index.py` | Offline version of the same pipeline, for the shipped book |
 | `compare_rag.py` | Side-by-side: naive vector RAG vs position-first |
-| `test_books.py` | Runs the user-book path against a stand-in Upstash. No keys needed |
+| `tests/` | 47 tests. Runs the whole retrieval and ingest path against a stand-in for Upstash — no keys, no network, no audio hardware |
 
 ## How we got here
 

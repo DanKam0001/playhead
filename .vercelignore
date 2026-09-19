@@ -2,7 +2,7 @@
 /audio/
 __pycache__/
 *.pyc
-smoke_test.py
+tests/
 probe_*.py
 bench_latency.py
 mic_check.py
@@ -13,4 +13,4 @@ make_demo_audiobook.py
 build_index.py
 check_keys.py
 data/*.transcript.json
-test_books.py
+tests/

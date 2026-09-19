@@ -123,7 +123,7 @@ never updates, and it latches on forever. Hence calibrating before arming.
 | Notes live in the browser, not the server | No accounts, no auth, no storage to secure, 11 days before a deadline. The export file is how they move between machines; `/api/context` carries a digest of past *questions* (not answers) for continuity. |
 | A user's book lives in Redis, not SQLite | The lambda filesystem is read-only, and the request that builds an index is not the request that reads it. `RedisLibrary` answers `window`/`search`/`duration_hint`/`len`, so the tools never learn which kind of book they hold. |
 | Indexing is driven by polling, not a worker | A function is killed at 10 s; transcribing a book takes minutes. Each `GET /api/books/{id}` advances the job one bounded step (poll the transcript, or embed the next 100 chunks) and saves where it got to. The progress bar is a side effect of that, not a fake. |
-| Vectors sharded, float16, 100 per key | 100 x 768 x 2 B = 154 KB, ~205 KB base64 — comfortably under Upstash's 1 MB request cap, and one shard is one Gemini batch. `test_books.py` proves float16 still recovers the exact top hit. |
+| Vectors sharded, float16, 100 per key | 100 x 768 x 2 B = 154 KB, ~205 KB base64 — comfortably under Upstash's 1 MB request cap, and one shard is one Gemini batch. `tests/` proves float16 still recovers the exact top hit. |
 | Times kept apart from text | A window lookup runs on every question and only needs `[[start,end],...]` (~20 B/chunk) plus the one text shard it lands in. Storing them together would drag a whole book across the wire per question. |
 | Uploads capped at 4 MB, links uncapped | The platform caps a request body at 4.5 MB. The browser checks size *before* sending so an audiobook gets a sentence, not an edge-level failure. AssemblyAI has no browser-safe upload token (checked 2026-09-19), so the key cannot move to the client. |
 | The books API is unauthenticated, so the guards are at the edges | No accounts by design. So: hosts resolved and private/loopback/link-local refused **before** any fetch (we make the request, so an unchecked link is our SSRF), redirects re-checked per hop, HEAD for type and size, and a per-IP hourly cap that counts **created** books, not attempts — charging someone's quota for a typo is rude, and a rejected paste only costs us a HEAD. |
@@ -151,7 +151,7 @@ but changed nothing, producing a `NameError` that only surfaced mid-demo.
 - Keys live in `Desktop/Bots/master_env`, synced by `Bots/sync_env.py`.
   `check_keys.py` verifies all three vendors — run it before any demo.
   **The Gemini keys in `Desktop/ENV/API.txt` are all dead. Don't use that file.**
-- `smoke_test.py` must pass with no API key and no audio hardware.
+- `tests/test_desktop_client.py` must pass with no API key and no audio hardware.
 - Three input devices here: default is the G433 headset mic; `--device 3` is a
   FDUCE M160 desk mic. `mic_check.py --list` enumerates them.
 - Demo on headphones. Book + reply out of speakers re-enter the mic; real
@@ -196,7 +196,7 @@ but changed nothing, producing a `NameError` that only surfaced mid-demo.
 `playhead/{player,mic,ears,session,brain,voice,config}.py`, `run_demo.py`,
 `mic_check.py`, `ask.py`, `bench_latency.py`, `make_demo_audiobook.py`.
 
-`check_keys.py` verifies all vendors. `smoke_test.py` covers the desktop client
+`check_keys.py` verifies all vendors. `tests/test_desktop_client.py` covers the desktop client
 and must pass with no key or hardware; **the web app has no automated tests** —
 verify it with `/api/health` and the page's event log.
 
@@ -355,13 +355,46 @@ obvious): transcribed, 14 chunks, ready in ~2.5 min; `passage_at_playhead` at
 `go_to_topic("the Lorentz transformation")` resolved to 7:04; the spoiler cap
 correctly returned no lookback at t=120.
 
-`test_books.py` covers the Redis path with **no keys and no network** — it runs
+`tests/` covers the Redis path with **no keys and no network** — it runs
 the real `RedisStore` against a stand-in for Upstash REST. It is the first
 automated test the web app has had. Run it after touching `store.py` or
 `books.py`.
 
 Notes and the resume point are now **per book** (`playhead:notes:<book id>`).
 Questions about one book were noise against another.
+
+## Measured under load (2026-09-19)
+
+Real numbers, not estimates. `pytest tests/test_scale.py -m slow -s` reprints
+the table.
+
+| | |
+|---|---|
+| 47-minute book, 45.7 MB | transcribed **and** indexed in **45 s** total |
+| 35-minute book | 52 chunks, ready in ~50 s |
+| Window lookup at 2000 chunks | ~3 ms, reads 2 of 20 shards, never loads vectors |
+| Vector search, 2000 chunks (11 h) | 43 ms |
+| Vector search, 8000 chunks (44 h) | 85 ms; index loads in 144 ms, 12 MB resident |
+| One shard (100 chunks x 768d fp16) | 200 KB base64 — under Upstash's 1 MB cap |
+
+**The retrieval layer is not the limit and will not become one.** AssemblyAI
+transcription time is the only thing that scales with book length in a way
+anyone notices.
+
+## Tests
+
+`pytest` — 51 tests, no keys, no network, no audio hardware. That is a hard
+rule: CI has none of those. `tests/fake_upstash.py` is a stand-in for the REST
+API, which is the only way to cover command encoding and 200 KB shards.
+
+Three bugs the suite caught that live testing had not:
+
+- "part of his intelligence" became a chapter titled `Part: of his
+  intelligence...`. A numbered heading has to carry its number.
+- "prefaced his speech" became `Preface: d his speech...`. The standalone
+  heading alternative was missing a trailing ``.
+- `Part 1` vanished from the fallback contents: a zero-width window at t=0
+  misses a first chunk that starts half a second in.
 
 ## Open and untested (as of 2026-09-19)
 

@@ -395,6 +395,91 @@ def _embed_slice(store, rec: BookRecord, embedder) -> BookRecord:
 
 # ---------- reading it back ----------
 
+# A narrator announces structure out loud: "Section 8: On the Idea of Time in
+# Physics", "Chapter Eleven". That announcement is the only table of contents an
+# audiobook has, so it is what we read.
+_NUMBER = (r"\d{1,3}|[ivxlcdm]{1,7}|one|two|three|four|five|six|seven|eight|nine|ten|"
+           r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
+           r"nineteen|twenty|twenty[- ]\w+|thirty|forty|fifty")
+HEADING_RE = re.compile(
+    # A numbered heading must actually carry its number. Without that, "part of
+    # his intelligence" and "book of the law" read as chapter openings, which
+    # is how Pride and Prejudice ended up with a chapter called "Part: of his
+    # intelligence, though unheard by Lydia".
+    r"\b(?:(chapter|section|part|book|volume|act|scene|lecture|appendix)\s+"
+    rf"({_NUMBER})\b"
+    # These stand alone, because they are never numbered.
+    # The trailing \b matters: without it "prefaced his speech with a solemn
+    # bow" becomes a chapter called "Preface: d his speech with a solemn bow".
+    r"|(preface|introduction|prologue|epilogue|conclusion|foreword|afterword)\b)"
+    r"\s*[:.\-—]?\s*(.{0,60})", re.I)
+
+
+def contents(lib) -> List[dict]:
+    """A table of contents, derived from what the reader says out loud.
+
+    An audiobook carries no chapter metadata -- the file is one opaque stream.
+    But the narrator announces each heading, so the transcript has them, and a
+    heading near the start of a chunk is almost always a real one rather than a
+    passing mention ("as I said in chapter three").
+
+    Falls back to even parts when a recording announces nothing, which is
+    better than an empty panel: it still lets someone jump around.
+    """
+    duration = lib.duration_hint()
+    if not duration:
+        return []
+    # Both Library and RedisLibrary answer window(), so one huge window is a
+    # portable way to walk every chunk without adding a method to either.
+    every = lib.window(duration / 2, before=duration, after=duration)
+    if not every:
+        return []
+
+    found, seen = [], set()
+    for c in every:
+        head = re.sub(r"\s+", " ", (c.text or "").strip())[:120]
+        # A chapter almost always opens with the previous one ending: "End of
+        # Section 7. Section 8: ...". Drop that, or we label the new chapter
+        # with the old one's number.
+        head = re.sub(r"^(?:end of\s+)[^.]{0,40}\.\s*", "", head, flags=re.I)
+        m = HEADING_RE.search(head)
+        # Only a heading that opens the chunk counts. Mid-paragraph references
+        # to other chapters are common and are not structure.
+        if not m or m.start() > 12:
+            continue
+
+        kind, number, standalone, rest = m.group(1), m.group(2), m.group(3), (m.group(4) or "")
+        # The title runs to the end of its own sentence, not for 60 characters.
+        rest = re.split(r"[.!?]", rest)[0].strip(" :;,-—")
+        label = f"{kind.title()} {number}" if kind else standalone.title()
+        if rest:
+            label += ": " + rest
+        label = label[:70].strip()
+
+        key = re.sub(r"[^a-z0-9]", "", label.lower())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        found.append({"t": round(c.start_s, 1), "title": label})
+
+    if len(found) >= 2:
+        return found[:60]
+
+    # Nothing announced: even parts, labelled with how they open.
+    n = min(8, max(2, len(every) // 4))
+    out = []
+    for i in range(n):
+        # A zero-width window at t=0 finds nothing when the first chunk starts
+        # a half-second in, which silently dropped "Part 1" off the front.
+        hits = lib.window(duration * i / n, before=0.0, after=2.0)
+        if not hits:
+            continue
+        opening = re.sub(r"\s+", " ", (hits[0].text or "")).strip()[:52]
+        out.append({"t": round(hits[0].start_s, 1),
+                    "title": f"Part {i + 1}", "hint": opening + "…"})
+    return out
+
+
 class RedisLibrary:
     """A book held in Redis, with the same methods main.py calls on Library.
 

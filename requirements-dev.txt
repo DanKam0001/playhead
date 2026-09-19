@@ -6,3 +6,4 @@ uvicorn[standard]==0.37.0
 sounddevice==0.5.1      # mic capture + playback (PortAudio)
 soundfile==0.12.1       # decode wav/flac/ogg
 elevenlabs==2.16.0
+pytest==9.1.1         # the test suite; needs no keys or hardware

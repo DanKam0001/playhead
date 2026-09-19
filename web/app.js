@@ -90,20 +90,18 @@ function clockText(t) {
 
 // ---------- the conversation ----------
 
-// The opening copy, kept in JS so clearing the conversation can put it back
+// The opening steps, kept here so clearing the conversation can put them back
 // rather than leaving an empty panel.
-const LEDE = [
-  'Press <b>Ask it questions</b>, let the book play, then just talk over it. Try '
-  + '<b>&ldquo;wait, what did that last part mean?&rdquo;</b> &mdash; the question names no '
-  + 'topic, so there is nothing to search for. Playhead answers it from where you are '
-  + 'in the audio.',
-  'Or say <b>&ldquo;take me to the part about the train&rdquo;</b> and the book moves there.',
+const STEPS = [
+  'Pick a book from the <b>library</b>',
+  '<b>Enable asking questions</b>',
+  'Talk over it whenever something doesn&rsquo;t land',
 ];
 
 let ledeCleared = false;
 function turn(who, text, cls) {
   if (!ledeCleared) {
-    transcriptEl.querySelectorAll(".lede").forEach((n) => n.remove());
+    transcriptEl.querySelectorAll(".steps").forEach((n) => n.remove());
     ledeCleared = true;
   }
   const wrap = document.createElement("div");
@@ -257,6 +255,107 @@ function seekFromEvent(e) {
     : (e.clientY - rect.top) / rect.height;
   book.currentTime = Math.max(0, Math.min(dur, frac * dur));
   paintSpine();
+}
+
+// ---------- speed ----------
+//
+// Anyone who listens to books seriously listens fast, and the rate has to
+// survive changing book and reloading or it is a toy.
+
+const RATES = [1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+
+function applyRate(r) {
+  book.playbackRate = r;
+  // Keep voices sounding like voices rather than chipmunks at 2x.
+  book.preservesPitch = true;
+  book.mozPreservesPitch = true;
+  book.webkitPreservesPitch = true;
+  storageSet("playhead:rate", r);
+  el("speeds").querySelectorAll("button").forEach((b) => {
+    b.setAttribute("aria-pressed", String(Number(b.dataset.rate) === r));
+  });
+}
+
+function buildSpeeds() {
+  const holder = el("speeds");
+  const saved = Number(storageGet("playhead:rate", 1)) || 1;
+  holder.textContent = "";
+  RATES.forEach((r) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.rate = String(r);
+    b.textContent = r === 1 ? "1×" : r + "×";
+    b.setAttribute("aria-label", `Play at ${r} times speed`);
+    b.addEventListener("click", () => applyRate(r));
+    holder.appendChild(b);
+  });
+  applyRate(RATES.includes(saved) ? saved : 1);
+}
+
+// ---------- table of contents ----------
+//
+// An audiobook file has no structure in it -- it is one opaque stream, which
+// is why skipping around one is guesswork. The backend reads the chapters back
+// out of the transcript, because the narrator announces them out loud.
+
+let chapters = [];
+
+async function loadContents(bookId) {
+  chapters = [];
+  renderContents();
+  el("tocnote").textContent = "Reading the book’s structure…";
+  el("tocnote").hidden = false;
+  try {
+    const data = await (await fetch("/api/books/" + encodeURIComponent(bookId) + "/contents",
+                                    { headers: withClient() })).json();
+    chapters = data.contents || [];
+  } catch (_) { chapters = []; }
+  renderContents();
+}
+
+function renderContents() {
+  const list = el("toclist");
+  const note = el("tocnote");
+  list.textContent = "";
+  if (!chapters.length) {
+    note.textContent = "This recording doesn’t announce chapters, so there are none to list.";
+    note.hidden = false;
+    return;
+  }
+  note.hidden = true;
+  chapters.forEach((c) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.t = String(c.t);
+    const at = document.createElement("span");
+    at.className = "at";
+    at.textContent = clockText(c.t);
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = c.title;
+    if (c.hint) t.title = c.hint;
+    b.append(at, t);
+    b.addEventListener("click", () => {
+      book.currentTime = c.t;
+      justSeeked = true;
+      book.play().catch(() => {});
+    });
+    li.appendChild(b);
+    list.appendChild(li);
+  });
+  markCurrentChapter();
+}
+
+function markCurrentChapter() {
+  if (!chapters.length) return;
+  const now = book.currentTime;
+  let active = -1;
+  chapters.forEach((c, i) => { if (c.t <= now + 0.5) active = i; });
+  el("toclist").querySelectorAll("button").forEach((b, i) => {
+    if (i === active) b.setAttribute("aria-current", "true");
+    else b.removeAttribute("aria-current");
+  });
 }
 
 // ---------- notes ----------
@@ -551,6 +650,7 @@ function selectBook(b, quiet) {
   notes = storageGet(notesKey(), []);
   pendingQ = null;
   renderNotes();
+  loadContents(b.id);
   offerResume();
   paintSpine();
   renderShelf();
@@ -570,8 +670,6 @@ function selectBook(b, quiet) {
 function renderLimits() {
   const drop = el("droplimit");
   if (drop) drop.textContent = `(up to ${limits.upload_mb} MB — longer books need a link)`;
-  const src = el("sourcelimit");
-  if (src) src.textContent = `${limits.source_mb} MB`;
 }
 
 function renderSuggested() {
@@ -948,6 +1046,7 @@ book.addEventListener("loadedmetadata", () => { paintSpine(); renderMarks(); });
 let lastRemembered = 0;
 book.addEventListener("timeupdate", () => {
   paintSpine();
+  markCurrentChapter();
   if (book.currentTime - lastRemembered > 5 || book.currentTime < lastRemembered) {
     lastRemembered = book.currentTime;
     rememberPosition();
@@ -1017,19 +1116,22 @@ el("clearnotes").addEventListener("click", () => {
   clearConversation();
 });
 
-// Wipe the transcript back to its opening state, lede and all.
+// Wipe the transcript back to its opening state, steps and all.
 function clearConversation() {
   transcriptEl.textContent = "";
   ledeCleared = false;
-  LEDE.forEach((html) => {
-    const p = document.createElement("p");
-    p.className = "lede";
-    p.innerHTML = html;
-    transcriptEl.appendChild(p);
+  const ol = document.createElement("ol");
+  ol.className = "steps";
+  STEPS.forEach((html) => {
+    const li = document.createElement("li");
+    li.innerHTML = html;
+    ol.appendChild(li);
   });
+  transcriptEl.appendChild(ol);
 }
 
 migrateOldKeys();
+buildSpeeds();
 notes = storageGet(notesKey(), []);
 renderNotes();
 paintSpine();

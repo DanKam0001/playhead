@@ -482,6 +482,21 @@ async def upload_book(request: Request):
     return out
 
 
+@app.get("/api/books/{book_id}/contents")
+def book_contents(book_id: str):
+    """Chapters, read off what the narrator announces.
+
+    An audiobook file carries no structure at all -- it is one opaque stream,
+    which is why skipping around is guesswork. The transcript gives it back.
+    """
+    if book_id == BOOK:
+        return {"contents": books.contents(library)}
+    rec = books.load(playheads, book_id)
+    if not rec or rec.status != "ready":
+        return {"contents": []}
+    return {"contents": books.contents(books.RedisLibrary(playheads, rec))}
+
+
 @app.get("/api/books/{book_id}")
 def book_status(book_id: str):
     """Status, and one slice of work.
