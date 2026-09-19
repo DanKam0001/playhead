@@ -252,6 +252,60 @@ def go_to_topic(call: TopicCall):
                         f"plays next:" + chr(10) + target.text)}
 
 
+class OutlineCall(BaseModel):
+    session_id: Optional[str] = None
+
+
+@app.post("/tools/book_outline")
+def book_outline(call: OutlineCall):
+    """What the whole book covers, so someone knows what they are walking into.
+
+    The spoiler cap exists to stop the agent *volunteering* what is ahead. Being
+    asked what a book is about is consent, the same way asking to be taken
+    somewhere is -- so this deliberately reads the entire book, not the part
+    already heard. Refusing here was the wrong behaviour: someone at 00:05 who
+    asks "what is this?" got told it was too early to say, which is useless.
+
+    Excerpts are sampled evenly across the duration rather than summarised by
+    us. The agent already has a language model; what it lacks is the text.
+    """
+    lib, title = library_for(call.session_id)
+    if not len(lib):
+        return {"ok": False, "message": "There's no indexed book loaded right now."}
+
+    picks = _spread(lib, 10)
+    if not picks:
+        return {"ok": False, "message": "I couldn't read the book's contents just now."}
+
+    t = playheads.get(call.session_id)
+    where = (f"They are {int(t)//60} minutes in." if t else "They are at the start.")
+    body = "\n".join(f"[{int(c.start_s)//60:02d}:{int(c.start_s)%60:02d}] {c.text}"
+                     for c in picks)
+    return {"ok": True, "message": (
+        f"Excerpts sampled evenly across the whole book, in order. "
+        f"Total length {int(lib.duration_hint())//60} minutes. {where}\n\n{body}\n\n"
+        f"Describe what this book covers and how it is organised, in three or "
+        f"four sentences, so they know what they are getting into. They asked, "
+        f"so telling them the shape of it is not a spoiler -- but if it is a "
+        f"story, do not give away how it ends.")}
+
+
+def _spread(lib, k: int = 10) -> list:
+    """K chunks spaced evenly across the book, in reading order."""
+    duration = lib.duration_hint()
+    if not duration:
+        return []
+    picked, seen = [], set()
+    for i in range(k):
+        # Sample at the middle of each band rather than the edges, so the first
+        # pick is not the title page and the last is not the licence notice.
+        hits = lib.window(duration * (i + 0.5) / k, before=0.0, after=0.0)
+        if hits and hits[0].id not in seen:
+            seen.add(hits[0].id)
+            picked.append(hits[0])
+    return picked
+
+
 def _embed(query: str):
     """One embedding, or None if embeddings are unavailable."""
     try:

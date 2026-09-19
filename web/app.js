@@ -24,6 +24,45 @@ const startBtn = el("start");
 
 let ws, session, micCtx, micNode, outCtx, playCursor = 0;
 let ducked = false, agentSpeaking = false, framesSent = 0, justSeeked = false;
+let scheduled = [];   // agent audio already queued on the device
+
+// ---------- spoken commands ----------
+//
+// A few things are better handled here than by the agent. "Carry on" should
+// stop the talking *now*; waiting for a model to decide it was an instruction
+// means another second of speech over someone who has asked for silence. These
+// match only a whole short utterance, so a real question containing the word
+// "continue" is never swallowed.
+
+const COMMANDS = [
+  {
+    match: /^\W*(?:ok(?:ay)?|alright|right|thanks?|thank you|got it|carry on|keep going|go on|continue|resume|play|unpause|back to (?:the )?book|never ?mind|that'?s (?:it|all))[\s.!,]*$/i,
+    run: () => {
+      flushReply();
+      resumeBook();
+      setStatus("listening - just talk", "live");
+      debug("command: carry on");
+    },
+  },
+  {
+    match: /^\W*(?:go back|back up|rewind|skip back)(?: a bit| a little)?[\s.!,]*$/i,
+    run: () => {
+      flushReply();
+      book.currentTime = Math.max(0, book.currentTime - 30);
+      resumeBook();
+      turn("playhead", "Back 30 seconds", "system");
+      debug("command: go back");
+    },
+  },
+];
+
+// Returns true when the utterance was a command and has been handled here.
+function handleCommand(text) {
+  const hit = COMMANDS.find((c) => c.match.test(text || ""));
+  if (!hit) return false;
+  hit.run();
+  return true;
+}
 
 function setStatus(text, state) {
   statusEl.textContent = text;
@@ -54,7 +93,7 @@ function clockText(t) {
 // The opening copy, kept in JS so clearing the conversation can put it back
 // rather than leaving an empty panel.
 const LEDE = [
-  'Press <b>Start listening</b>, let it play, then just talk over it. Try '
+  'Press <b>Ask it questions</b>, let the book play, then just talk over it. Try '
   + '<b>&ldquo;wait, what did that last part mean?&rdquo;</b> &mdash; the question names no '
   + 'topic, so there is nothing to search for. Playhead answers it from where you are '
   + 'in the audio.',
@@ -725,9 +764,16 @@ function playReply(b64) {
   if (playCursor < now) playCursor = now;
   node.start(playCursor);
   playCursor += buf.duration;
+  // Keep the handle. Resetting the cursor alone does not silence anything --
+  // these buffers are already scheduled on the device and will play out
+  // regardless, which is why "interrupted" used to keep talking.
+  scheduled.push(node);
+  node.onended = () => { scheduled = scheduled.filter((n) => n !== node); };
 }
 
 function flushReply() {
+  scheduled.forEach((n) => { try { n.stop(); } catch (_) { /* already done */ } });
+  scheduled = [];
   playCursor = 0;
 }
 
@@ -833,6 +879,10 @@ async function start() {
         if (partial) partial.closest(".turn").remove();
         partial = null;
         turn("you", m.text || "");
+        // A command is an instruction, not a question: it gets acted on here
+        // and is deliberately not kept as a note. "Carry on" is not a thing
+        // anyone wants on their map of where the book lost them.
+        if (handleCommand(m.text)) break;
         noteQuestion(m.text || "");
         pauseBook();
         setStatus("thinking", "busy");

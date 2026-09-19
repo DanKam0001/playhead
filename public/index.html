@@ -84,14 +84,28 @@
   .btn.primary:hover{filter:brightness(1.08)}
   .btn:disabled{opacity:.45; cursor:default}
 
+  .btn.big{width:100%; padding:12px 16px; font-size:15px; text-align:center}
+  .micnote{margin:8px 0 20px; font-size:11.5px; line-height:1.5; color:var(--ink-3)}
+
+  /* The spoken vocabulary, on screen. A voice interface nobody can see is a
+     voice interface nobody uses. */
+  .says{margin-top:20px; border-top:1px solid var(--rule); padding-top:14px}
+  .says h2{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em;
+           text-transform:uppercase; color:var(--ink-3); font-weight:400; margin:0 0 10px}
+  .says dl{margin:0}
+  .says dt{font-family:var(--serif); font-size:13.5px; color:var(--ink);
+           line-height:1.35; margin-top:9px}
+  .says dt:first-of-type{margin-top:0}
+  .says dd{margin:1px 0 0; font-size:11px; color:var(--ink-3); line-height:1.4}
+
   /* ---------------- layout ---------------- */
   main{
-    display:grid; grid-template-columns:232px minmax(0,1fr);
+    display:grid; grid-template-columns:250px minmax(0,1fr);
     gap:0; max-width:1120px; margin:0 auto; align-items:start;
   }
   .rail{
-    position:sticky; top:63px; padding:26px 22px 40px;
-    border-right:1px solid var(--rule); min-height:calc(100vh - 63px);
+    padding:22px 22px 40px;
+    border-right:1px solid var(--rule);
   }
   .stage{padding:26px 30px 60px; min-width:0}
 
@@ -112,7 +126,7 @@
   .times #clock{color:var(--ink); font-weight:500}
   .times #total{color:var(--ink-3)}
 
-  .spinewrap{display:flex; gap:12px; align-items:stretch; height:min(46vh,420px)}
+  .spinewrap{display:flex; gap:12px; align-items:stretch; height:min(34vh,300px)}
   #spine{
     position:relative; width:10px; flex:none; border-radius:5px;
     background:var(--sunk); border:1px solid var(--rule);
@@ -321,14 +335,19 @@
 
 <header>
   <h1 class="wordmark">Play<em>head</em></h1>
-  <p class="nowplaying">Listening to <b id="booktitle">Relativity: The Special and General Theory</b></p>
-  <button class="btn" id="librarybtn" aria-expanded="false" aria-controls="library">Library</button>
-  <button class="btn primary" id="start">Start listening</button>
+  <p class="nowplaying">Playing <b id="booktitle">Relativity: The Special and General Theory</b></p>
+  <button class="btn" id="librarybtn" aria-expanded="false" aria-controls="library">Library &amp; books</button>
 </header>
 
 <main>
   <!-- The rail is the book as an axis: progress, and every question in its place. -->
   <div class="rail">
+    <!-- "Start listening" read as though the app were the one listening for
+         instructions. The listener is the one with questions; the button
+         should say what they get to do. -->
+    <button class="btn primary big" id="start">Ask it questions</button>
+    <p class="micnote" id="micnote">Turns on your microphone. Then just talk over the book &mdash; no button to hold.</p>
+
     <div class="transport">
       <button id="play" aria-label="Play or pause the book">
         <svg id="playicon" viewBox="0 0 12 14" aria-hidden="true"><path d="M0 0l12 7-12 7z"/></svg>
@@ -354,6 +373,28 @@
       <label class="tiny" for="importfile" tabindex="0" role="button">Import</label>
       <input id="importfile" type="file" accept=".md,.json,text/markdown" class="vh">
       <button class="tiny" id="clearnotes" type="button">Clear</button>
+    </div>
+
+    <!-- Nobody discovers a voice interface by guessing. The vocabulary has to
+         be on screen, in the words you would actually say. -->
+    <div class="says">
+      <h2>Say any time</h2>
+      <dl>
+        <dt>&ldquo;Wait, what did that mean?&rdquo;</dt>
+        <dd>Explains what you just heard</dd>
+        <dt>&ldquo;What&rsquo;s this book about?&rdquo;</dt>
+        <dd>The whole thing, before you commit</dd>
+        <dt>&ldquo;Take me to the part about&hellip;&rdquo;</dt>
+        <dd>Jumps the book to a topic</dd>
+        <dt>&ldquo;Carry on&rdquo;</dt>
+        <dd>Cuts the answer short, back to the book</dd>
+        <dt>&ldquo;Go back&rdquo;</dt>
+        <dd>Rewinds thirty seconds</dd>
+        <dt>&ldquo;Say that again&rdquo;</dt>
+        <dd>Repeats the last answer</dd>
+        <dt>&ldquo;Where am I?&rdquo;</dt>
+        <dd>Where you are, and what&rsquo;s happening</dd>
+      </dl>
     </div>
   </div>
 
@@ -401,7 +442,7 @@
     </section>
 
     <div id="transcript">
-      <p class="lede">Press <b>Start listening</b>, let it play, then just talk over it.
+      <p class="lede">Press <b>Ask it questions</b>, let the book play, then just talk over it.
         Try <b>&ldquo;wait, what did that last part mean?&rdquo;</b> &mdash; the question names
         no topic, so there is nothing to search for. Playhead answers it from where you
         are in the audio.</p>
