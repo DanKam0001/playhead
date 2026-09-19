@@ -62,7 +62,11 @@ def report_playhead(p: Playhead):
     stays stateless from the agent's point of view.
     """
     playheads.set(p.session_id, max(0.0, p.seconds))
-    return {"ok": True}
+    # The same heartbeat carries jumps back. The agent cannot move the audio
+    # itself -- it runs on AssemblyAI's servers -- so go_to_topic leaves a
+    # pending position here and the browser collects it within the second.
+    seek = playheads.take_seek(p.session_id)
+    return {"ok": True, "seek": seek} if seek is not None else {"ok": True}
 
 
 @app.get("/api/session")
@@ -123,6 +127,57 @@ def passage_at_playhead(call: ToolCall):
                       " ".join(c.text for c in far)]
 
     return {"ok": True, "playhead_seconds": round(t, 1), "message": "\n".join(parts)}
+
+
+class TopicCall(BaseModel):
+    session_id: Optional[str] = None
+    topic: str
+
+
+@app.post("/tools/go_to_topic")
+def go_to_topic(call: TopicCall):
+    """Navigation by meaning: the mirror image of passage_at_playhead.
+
+    You cannot skim an audiobook. A sighted reader flips to the right page in
+    seconds; by ear the only controls are a scrubber and guesswork. So the
+    listener names a topic and the book moves to it.
+
+    The spoiler cap deliberately does NOT apply here. It exists to stop the
+    agent volunteering what is ahead; being asked to go there is consent.
+    """
+    vec = _embed(call.topic)
+    if vec is None:
+        return {"ok": False,
+                "message": "I can't look up topics right now - say roughly where "
+                           "you want to go instead."}
+    hits = library.search(vec, k=1)
+    if not hits:
+        return {"ok": False,
+                "message": f"I couldn't find anything about {call.topic} in this book."}
+
+    target = hits[0]
+    # Start a little before the passage, so the listener hears it introduced
+    # rather than landing mid-sentence.
+    start = max(0.0, target.start_s - 8)
+    playheads.request_seek(call.session_id, start)
+    return {"ok": True, "seek_seconds": round(start, 1),
+            "message": (f"Moving the book to {int(start)//60}:{int(start)%60:02d}, "
+                        f"where this comes up. Tell the listener where you are taking "
+                        f"them and what is there, in one sentence. This is what "
+                        f"plays next:" + chr(10) + target.text)}
+
+
+def _embed(query: str):
+    """One embedding, or None if embeddings are unavailable."""
+    try:
+        from echoread.brain import GeminiEmbedder
+        key = os.getenv("GEMINI_API_KEY", "")
+        if not key:
+            return None
+        return GeminiEmbedder(key)([query], "query")[0]
+    except Exception as exc:
+        print(f"[tool] embed failed: {exc}")
+        return None
 
 
 def _search_earlier(query: str, before_s: float, exclude) -> list:

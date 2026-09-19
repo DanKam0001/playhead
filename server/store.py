@@ -22,11 +22,17 @@ from typing import Optional, Protocol
 # session, short enough that abandoned ones clear themselves out.
 TTL_SECONDS = 3600
 LATEST_KEY = "echoread:latest"
+SEEK_LATEST_KEY = "echoread:seek:latest"
+# A requested jump is consumed once. Leaving it set would drag the
+# listener back to the same spot on every heartbeat.
+SEEK_TTL_SECONDS = 30
 
 
 class PlayheadStore(Protocol):
     def set(self, session_id: str, seconds: float) -> None: ...
     def get(self, session_id: Optional[str]) -> Optional[float]: ...
+    def request_seek(self, session_id: Optional[str], seconds: float) -> None: ...
+    def take_seek(self, session_id: Optional[str]) -> Optional[float]: ...
 
 
 class MemoryStore:
@@ -34,6 +40,7 @@ class MemoryStore:
 
     def __init__(self):
         self._d: dict[str, tuple[float, float]] = {}
+        self._seeks: dict[str, tuple[float, float]] = {}
 
     def set(self, session_id: str, seconds: float) -> None:
         self._prune()
@@ -53,6 +60,17 @@ class MemoryStore:
         cutoff = time.time() - TTL_SECONDS
         for k in [k for k, v in self._d.items() if v[1] < cutoff]:
             self._d.pop(k, None)
+
+    def request_seek(self, session_id: Optional[str], seconds: float) -> None:
+        self._seeks[session_id or "latest"] = (seconds, time.time())
+
+    def take_seek(self, session_id: Optional[str]) -> Optional[float]:
+        for key in ([session_id] if session_id else []) + ["latest"]:
+            hit = self._seeks.pop(key, None)
+            if hit and time.time() - hit[1] < SEEK_TTL_SECONDS:
+                self._seeks.pop("latest", None)
+                return hit[0]
+        return None
 
     @property
     def kind(self) -> str:
@@ -92,6 +110,37 @@ class RedisStore:
                     return float(raw)
                 except ValueError:
                     continue
+        return None
+
+    def request_seek(self, session_id: Optional[str], seconds: float) -> None:
+        value = str(seconds)
+        keys = ([f"echoread:seek:{session_id}"] if session_id else []) + [SEEK_LATEST_KEY]
+        for key in keys:
+            try:
+                self._cmd("set", key, value, "EX", str(SEEK_TTL_SECONDS))
+            except Exception as exc:
+                print(f"[store] redis seek set failed: {exc}")
+
+    def take_seek(self, session_id: Optional[str]) -> Optional[float]:
+        # GETDEL, so the jump happens once and the listener keeps control
+        # afterwards.
+        for key in ([f"echoread:seek:{session_id}"] if session_id else []) + [SEEK_LATEST_KEY]:
+            try:
+                raw = self._cmd("getdel", key)
+            except Exception as exc:
+                print(f"[store] redis seek take failed: {exc}")
+                return None
+            if raw is not None:
+                try:
+                    seconds = float(raw)
+                except ValueError:
+                    continue
+                if key != SEEK_LATEST_KEY:
+                    try:
+                        self._cmd("del", SEEK_LATEST_KEY)
+                    except Exception:
+                        pass
+                return seconds
         return None
 
     @property

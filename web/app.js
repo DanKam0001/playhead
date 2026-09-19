@@ -22,7 +22,7 @@ const transcriptEl = el("transcript");
 const startBtn = el("start");
 
 let ws, session, micCtx, micNode, outCtx, playCursor = 0;
-let ducked = false, agentSpeaking = false, framesSent = 0;
+let ducked = false, agentSpeaking = false, framesSent = 0, justSeeked = false;
 
 function setStatus(text, state) {
   statusEl.textContent = text;
@@ -76,12 +76,27 @@ function resumeBook() {
 async function reportPlayhead() {
   if (!session) return;
   try {
-    await fetch("/api/playhead", {
+    const res = await fetch("/api/playhead", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: session.session_id, seconds: book.currentTime }),
     });
+    // The reply can carry a jump. go_to_topic runs on AssemblyAI's servers and
+    // cannot touch this page, so it leaves a position behind and we collect it.
+    const data = await res.json();
+    if (typeof data.seek === "number") applySeek(data.seek);
   } catch (_) { /* a dropped report is harmless; the next one is a second away */ }
+}
+
+function applySeek(seconds) {
+  book.currentTime = seconds;
+  // Suppress the usual rewind-on-resume: the listener asked to be here, and
+  // backing up 3 s from a deliberate jump is just wrong.
+  justSeeked = true;
+  const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const ss = String(Math.floor(seconds % 60)).padStart(2, "0");
+  debug(`jumped to ${mm}:${ss}`);
+  line("echoread", `<em>Jumped to ${mm}:${ss}</em>`);
 }
 
 // ---------- audio plumbing ----------
@@ -260,8 +275,10 @@ async function start() {
       case "reply.done":
         agentSpeaking = false;
         if (m.status === "interrupted") flushReply();
-        // Back up slightly so the run-up to the question is re-heard.
-        book.currentTime = Math.max(0, book.currentTime - 3);
+        // Back up slightly so the run-up to the question is re-heard — unless
+        // the agent just moved us somewhere on purpose.
+        if (justSeeked) justSeeked = false;
+        else book.currentTime = Math.max(0, book.currentTime - 3);
         resumeBook();
         setStatus("listening - just talk", "live");
         break;
