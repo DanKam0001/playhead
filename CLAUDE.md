@@ -371,6 +371,7 @@ the table.
 | | |
 |---|---|
 | 47-minute book, 45.7 MB | transcribed **and** indexed in **45 s** total |
+| Same book **with `auto_chapters`** | ~2 min — the feature adds real time, and is worth it |
 | 35-minute book | 52 chunks, ready in ~50 s |
 | Window lookup at 2000 chunks | ~3 ms, reads 2 of 20 shards, never loads vectors |
 | Vector search, 2000 chunks (11 h) | 43 ms |
@@ -380,6 +381,19 @@ the table.
 **The retrieval layer is not the limit and will not become one.** AssemblyAI
 transcription time is the only thing that scales with book length in a way
 anyone notices.
+
+## Chapters come from AssemblyAI, not from us
+
+`auto_chapters: true` on the transcription request returns semantically
+segmented chapters with timestamps and written headlines. On a 47-minute
+Austen file it produced **8 chapters** with real summaries, where reading the
+narrator's own announcements found one and fell back to "Part 1..8".
+
+It is marked **deprecated** in favour of the LLM Gateway, which this account is
+gated out of (see `probe_gateway.py`). So: used while it exists, requested
+inside a try that retries without it, and `books.contents()` still derives a
+table of contents from the transcript when it is missing or returns fewer than
+two. Do not delete that fallback.
 
 ## Tests
 

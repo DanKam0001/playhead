@@ -494,7 +494,16 @@ def book_contents(book_id: str):
     rec = books.load(playheads, book_id)
     if not rec or rec.status != "ready":
         return {"contents": []}
-    return {"contents": books.contents(books.RedisLibrary(playheads, rec))}
+    # AssemblyAI's own segmentation first: its headlines are written from the
+    # content, so they work on the many recordings that never announce a
+    # chapter out loud. Reading the narrator's announcements is the fallback.
+    # Two or more, or it is not a table of contents. A short recording often
+    # comes back as a single chapter, which is less navigable than even parts.
+    stored = books.stored_chapters(playheads, book_id)
+    if len(stored) >= 2:
+        return {"contents": stored, "source": "auto_chapters"}
+    return {"contents": books.contents(books.RedisLibrary(playheads, rec)),
+            "source": "transcript"}
 
 
 @app.get("/api/books/{book_id}")

@@ -189,8 +189,26 @@ def start_transcription(audio_url: str, key: str) -> str:
     # speech_models is left at its default (universal-3-5-pro, falling back to
     # universal-2). Pinning it here would silently break when the flagship
     # model is renamed, which has already happened once on this project.
-    body = {"audio_url": audio_url, "punctuate": True, "format_text": True}
-    return _aai("/transcript", key, body)["id"]
+    #
+    # auto_chapters gives semantically segmented chapters with timestamps,
+    # which is a far better table of contents than anything we can derive --
+    # and it is the only way to get one for a recording that never announces
+    # its structure out loud. Marked deprecated in favour of the LLM Gateway,
+    # which this account is gated out of, so it is used while it exists and
+    # `contents()` still works without it.
+    body = {"audio_url": audio_url, "punctuate": True, "format_text": True,
+            "auto_chapters": True}
+    try:
+        return _aai("/transcript", key, body)["id"]
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode()[:300]
+        if "auto_chapters" not in detail:
+            raise
+        # Too short for chapters, or the feature is gone. Neither is a reason
+        # to refuse the book.
+        print(f"[books] auto_chapters rejected, retrying without: {detail[:120]}")
+        body.pop("auto_chapters")
+        return _aai("/transcript", key, body)["id"]
 
 
 # ---------- the record ----------
@@ -348,6 +366,19 @@ def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
         store.kv_set(_key(rec.id, f"text:{i // SLICE}"),
                      json.dumps([c.text for c in chunks[i:i + SLICE]]), ttl=BOOK_TTL)
 
+    # Keep AssemblyAI's own chapter segmentation if it produced any. Its
+    # headlines are written from the content, so they work on recordings that
+    # never say "chapter one" out loud -- which is most of them.
+    aai_chapters = [
+        {"t": round((ch.get("start") or 0) / 1000.0, 1),
+         "title": (ch.get("headline") or ch.get("gist") or "").strip()[:70]}
+        for ch in (t.get("chapters") or [])
+        if (ch.get("headline") or ch.get("gist"))
+    ]
+    if aai_chapters:
+        store.kv_set(_key(rec.id, "chapters"), json.dumps(aai_chapters), ttl=BOOK_TTL)
+        print(f"[books] {rec.id}: {len(aai_chapters)} chapters from auto_chapters")
+
     rec.n_chunks = len(chunks)
     rec.duration = float(t.get("audio_duration") or (chunks[-1].end_s if chunks else 0))
     rec.status, rec.embedded = "indexing", 0
@@ -413,6 +444,17 @@ HEADING_RE = re.compile(
     # bow" becomes a chapter called "Preface: d his speech with a solemn bow".
     r"|(preface|introduction|prologue|epilogue|conclusion|foreword|afterword)\b)"
     r"\s*[:.\-—]?\s*(.{0,60})", re.I)
+
+
+def stored_chapters(store, book_id: str) -> List[dict]:
+    """AssemblyAI's own segmentation, if this book was transcribed with it."""
+    raw = store.kv_get(_key(book_id, "chapters"))
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except Exception:
+        return []
 
 
 def contents(lib) -> List[dict]:
