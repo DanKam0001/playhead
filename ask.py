@@ -4,8 +4,8 @@
 """
 import os, sys
 from dotenv import load_dotenv
-from echoread.brain import Brain
-from echoread.library import Library
+from playhead.brain import Brain
+from playhead.library import Library
 
 load_dotenv()
 

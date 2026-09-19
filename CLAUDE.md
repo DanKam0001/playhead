@@ -1,4 +1,4 @@
-# EchoRead — agent handoff
+# Playhead — agent handoff
 
 Interactive audiobook voice agent. Listen to a technical audiobook; interrupt it
 by talking ("wait, what did that last sentence mean?"); discuss; resume.
@@ -17,12 +17,12 @@ requires a live Application URL. Both still exist in this repo.
 
 | | **Web app — THE PRODUCT** | Desktop app — retired |
 |---|---|---|
-| Live at | https://echoread-alpha.vercel.app | local only |
-| Code | `server/`, `web/`, `public/`, `api/`, `scripts/` | `echoread/{mic,ears,session,voice,player,brain}.py`, `run_demo.py` |
+| Live at | https://playhead-app.vercel.app | local only |
+| Code | `server/`, `web/`, `public/`, `api/`, `scripts/` | `playhead/{mic,ears,session,voice,player,brain}.py`, `run_demo.py` |
 | STT / LLM / TTS | AssemblyAI Voice Agent (all three) | AssemblyAI streaming + Gemini + ElevenLabs |
 | Barge-in | Voice Agent `input.speech.started` + browser echo cancellation | local EnergyVad + two-stage calibration |
 
-**Shared by both, and the actual novelty:** `echoread/library.py` (position-first
+**Shared by both, and the actual novelty:** `playhead/library.py` (position-first
 retrieval + spoiler cap) and `build_index.py` (the timestamped index).
 
 **Do not spend time on mic calibration, `MIN_TRIGGER_RMS`, `ATTACK_FRAMES`, turn
@@ -43,7 +43,7 @@ changes:
 cp web/index.html web/app.js public/
 ```
 
-Verify after deploying: `curl -s https://echoread-alpha.vercel.app/static/app.js | grep <your change>`.
+Verify after deploying: `curl -s https://playhead-app.vercel.app/static/app.js | grep <your change>`.
 
 ---
 
@@ -177,9 +177,9 @@ but changed nothing, producing a `NameError` that only surfaced mid-demo.
 
 | File | Role |
 |---|---|
-| `echoread/library.py` | Position window + semantic search capped at the playhead |
+| `playhead/library.py` | Position window + semantic search capped at the playhead |
 | `build_index.py` | Audio -> transcript -> chunks -> embeddings -> keyterms |
-| `compare_rag.py` | Naive vector RAG vs EchoRead side by side — the video's money shot |
+| `compare_rag.py` | Naive vector RAG vs Playhead side by side — the video's money shot |
 
 **Probes — how the undocumented API was learned:**
 
@@ -193,7 +193,7 @@ but changed nothing, producing a `NameError` that only surfaced mid-demo.
 | `probe_gateway.py` | LLM Gateway access (gated on this account) |
 
 **Retired desktop client** (see the two-codebases note at the top):
-`echoread/{player,mic,ears,session,brain,voice,config}.py`, `run_demo.py`,
+`playhead/{player,mic,ears,session,brain,voice,config}.py`, `run_demo.py`,
 `mic_check.py`, `ask.py`, `bench_latency.py`, `make_demo_audiobook.py`.
 
 `check_keys.py` verifies all vendors. `smoke_test.py` covers the desktop client
@@ -212,8 +212,8 @@ verify it with `/api/health` and the page's event log.
 
 ## Deployment (live 2026-09-13)
 
-**https://echoread-alpha.vercel.app** — Vercel project `echoread`, scope
-`dankam0001s-projects`, agent `agent_b7b84b2a03254f86b3b6f468878ebaa8`.
+**https://playhead-app.vercel.app** — Vercel project `echoread` (not renamed), scope
+`dankam0001s-projects`, agent `agent_e57bd5132f18404c912d9e1c2de46ee7`.
 
 ```bash
 TOKEN=$(grep -oE '^VERCEL_API_KEY=.*' ~/Desktop/Bots/master_env | cut -d= -f2-)
@@ -221,16 +221,31 @@ vercel deploy --prod --yes --token "$TOKEN" --scope dankam0001s-projects
 ```
 
 Env vars are set on the Vercel project (ASSEMBLYAI_API_KEY, GEMINI_API_KEY,
-UPSTASH_REDIS_REST_URL/TOKEN, ECHOREAD_AGENT_ID). `/api/health` reports whether
+UPSTASH_REDIS_REST_URL/TOKEN, PLAYHEAD_AGENT_ID). `/api/health` reports whether
 the agent is configured and which store is in use — check it after any deploy.
 
 ### Four things that will bite on this deployment
 
-1. **Use the ALIAS, never the deployment URL.** `ssoProtection` is
+1. **Use the PROJECT DOMAIN, never a deployment URL — and note that a
+   deployment alias is not the same thing.** `ssoProtection` is
    `all_except_custom_domains`, so `echoread-<hash>-....vercel.app` 302s to
-   `vercel.com/sso-api` while `echoread-alpha.vercel.app` serves the real app.
+   `vercel.com/sso-api` while `playhead-app.vercel.app` serves the real app.
    A tool URL or submission link pointing at a deployment URL will silently
    land on a Vercel login page.
+
+   **The trap found during the rename (2026-09-19):** `vercel alias set` looks
+   like it works — the alias resolves — but it is a *deployment alias* and is
+   **still behind SSO**. The exemption applies to a **project domain**. Same
+   URL shape, different object. Adding it properly:
+
+   ```bash
+   curl -X POST "https://api.vercel.com/v10/projects/echoread/domains?teamId=$TEAM" \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"name":"playhead-app.vercel.app"}'
+   ```
+
+   Verify with `curl -s <url>/api/health` — a 302 to `vercel.com/sso-api`
+   means it is still an alias, not a domain.
 2. **Serverless breaks in-memory state.** The browser POSTs the playhead on one
    lambda; AssemblyAI's tool call lands on another. `server/store.py` keeps it
    in Upstash Redis for exactly this reason, falling back to a dict locally.
@@ -345,19 +360,21 @@ the real `RedisStore` against a stand-in for Upstash REST. It is the first
 automated test the web app has had. Run it after touching `store.py` or
 `books.py`.
 
-Notes and the resume point are now **per book** (`echoread:notes:<book id>`).
+Notes and the resume point are now **per book** (`playhead:notes:<book id>`).
 Questions about one book were noise against another.
 
 ## Open and untested (as of 2026-09-19)
 
-- **The bring-your-own-book work is NOT DEPLOYED.** It was built, run and
-  verified locally on 2026-09-19, but the production deploy was blocked by a
-  permission prompt and never ran. `echoread-alpha.vercel.app` is still serving
-  the previous build. Nothing about the feature is live until someone runs the
-  deploy in the Deployment section and re-checks `/api/health`. The Upstash
-  round trip is covered by `test_books.py` against a stand-in, **not** against
-  real Upstash — confirm a book reaches `ready` on the live site before filming
-  it.
+- **iOS playback is fixed from the symptom, not from a device.** The cause is
+  certain (see the iOS section) and the fix is the standard one, but nobody has
+  watched a book play on an actual iPhone since. Test before filming anything
+  on a phone.
+- **The live demo is on the free tiers of everything.** AssemblyAI
+  transcription, Gemini embeddings and Upstash all have quotas, and the books
+  endpoint is open to the internet behind nothing but a per-IP hourly cap.
+  Judging traffic is the first real load it will ever see. If books start
+  failing to index during the judging window, check vendor quotas before
+  debugging code.
 - **Speaker mode (no headphones) has never been tested.** The old "headphones
   are non-negotiable" line is a *desktop-era* constraint that got repeated by
   mistake: the browser cancels its own output (the book and the reply both play

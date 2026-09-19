@@ -54,7 +54,7 @@ def main() -> int:
         print(f"created agent {agent.get('id')}")
 
     agent_id = agent.get("id") or (match or {}).get("id")
-    print(f"\nECHOREAD_AGENT_ID={agent_id}")
+    print(f"\nPLAYHEAD_AGENT_ID={agent_id}")
     print("Put that in .env, then start the server.")
     return 0
 

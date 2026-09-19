@@ -1,11 +1,14 @@
-# EchoRead
+# Playhead
 
 **An audiobook you can interrupt.** Say *"wait, what did that last part mean?"*
 and it answers about the passage you just heard — then picks up where it left off.
 
-**Live: https://echoread-alpha.vercel.app** — press start, let it play, talk over it.
+**Live: https://playhead-app.vercel.app** — press start, let it play, talk over it.
 
 Built for the AssemblyAI Voice Agent Hackathon.
+
+> The name is the idea. In every other system the query is what you typed; here
+> the query is **where you are**. The playhead is the question.
 
 ---
 
@@ -25,7 +28,7 @@ with. **The question contains no topic.** There is no phrase to search for, no
 entity to match, no keyword to embed. Every naive RAG pipeline answers this
 question badly, because the thing being asked about is not in the question.
 
-EchoRead retrieves by **position, not by words**. The listener's playhead — where
+Playhead retrieves by **position, not by words**. The listener's playhead — where
 they are in the audio — is the query. The passage they just heard is the answer's
 context, whether or not they managed to name it.
 
@@ -47,7 +50,7 @@ Two rules fall out of it:
 ## Bring your own audiobook
 
 The shipped Einstein chapter is a demo, not the product. Paste a direct link to
-any audio file — or drop a short one in — and EchoRead builds it the same index
+any audio file — or drop a short one in — and Playhead builds it the same index
 it uses for its own book:
 
 ```
@@ -147,6 +150,25 @@ servers, so for local development use a tunnel (ngrok, cloudflared), not
 localhost. `GET /api/health` reports whether the agent is configured and which
 store is in use.
 
+### Settings
+
+| Variable | Default | What it does |
+|---|---|---|
+| `ASSEMBLYAI_API_KEY` | — | Required. STT, TTS, the agent, and transcription |
+| `GEMINI_API_KEY` | — | Embeddings. Without it, position retrieval still works; topic search does not |
+| `PLAYHEAD_AGENT_ID` | — | The stored agent, from `scripts/create_agent.py` |
+| `PLAYHEAD_BOOK` | `relativity` | Which baked-in index to ship as the default book |
+| `PLAYHEAD_MAX_UPLOAD_MB` | `4` | Ceiling on a direct file upload |
+| `PLAYHEAD_MAX_SOURCE_MB` | `150` | Ceiling on a book fetched from a link |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | — | Shared state. Without them it falls back to process memory, which is correct locally and **wrong on serverless** |
+
+The two size ceilings are settings rather than constants so a different host can
+raise them without touching code. One caveat on `PLAYHEAD_MAX_UPLOAD_MB`: it is
+only ours down to whatever the platform enforces. Vercel rejects a request body
+over ~4.5 MB at the edge, before any of this code runs, so raising it past that
+only helps somewhere without that cap. Links have no such ceiling, which is why
+they are the main path for a full-length book.
+
 To index a different book, use the Library panel in the page — or, to bake one
 into the repo the way the shipped book is:
 
@@ -165,14 +187,14 @@ python test_books.py                       # the user-book path, no keys require
 | `server/books.py` | Bring-your-own-book: transcribe → chunk → embed → `RedisLibrary` |
 | `server/store.py` | Shared state: playhead, pending seek, prior context, book indexes |
 | `server/agent.json` | The stored agent: system prompt + the two tools |
-| `echoread/library.py` | The retrieval core — time window, capped semantic search |
+| `playhead/library.py` | The retrieval core — time window, capped semantic search |
 | `build_index.py` | Offline version of the same pipeline, for the shipped book |
 | `compare_rag.py` | Side-by-side: naive vector RAG vs position-first |
 | `test_books.py` | Runs the user-book path against a stand-in Upstash. No keys needed |
 
 ## How we got here
 
-EchoRead began as a desktop app with local voice-activity detection, streaming
+Playhead began as a desktop app with local voice-activity detection, streaming
 STT, and a separate TTS vendor. That version worked, and the tuning taught us
 things worth keeping: speech reads at 0.024 RMS against room tone at 0.0002;
 local barge-in detection beat a network round trip ~50 ms to ~300 ms; a

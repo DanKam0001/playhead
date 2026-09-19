@@ -4,7 +4,7 @@ The built-in book is a SQLite file baked into the repo. A book someone adds at
 runtime cannot be: the filesystem on a lambda is read-only, and the request that
 builds the index is not the request that later reads it. So a user book lives in
 the same Redis the playhead uses, behind a class with the same surface as
-`echoread.library.Library` -- `window`, `search`, `duration_hint`, `len` -- so
+`playhead.library.Library` -- `window`, `search`, `duration_hint`, `len` -- so
 the tools in main.py never learn which kind of book they are holding.
 
 The pipeline is deliberately resumable, one bounded slice of work per HTTP
@@ -30,14 +30,14 @@ from typing import List, Optional
 
 import numpy as np
 
-from echoread.library import Chunk, WINDOW_AFTER_S, WINDOW_BEFORE_S
+from playhead.library import Chunk, WINDOW_AFTER_S, WINDOW_BEFORE_S
 
 AAI_BASE = "https://api.assemblyai.com/v2"
 
 # Gemini caps an embedding batch at 100, and one batch is about a second of
 # work -- a safe amount to do inside a single request.
 SLICE = 100
-# 768-d, matching echoread.brain.EMBED_DIM and the shipped .npy.
+# 768-d, matching playhead.brain.EMBED_DIM and the shipped .npy.
 DIM = 768
 # Stored as float16. Cosine similarity over normalised vectors does not care
 # about the last few bits of mantissa, and it halves what crosses the wire.
@@ -101,7 +101,7 @@ class _GuardedRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def check_source(url: str) -> dict:
+def check_source(url: str, max_bytes: int = MAX_SOURCE_BYTES) -> dict:
     """Decide whether a link is worth handing to AssemblyAI, before we do.
 
     Returns what the HEAD told us. A server that refuses HEAD is not treated as
@@ -118,7 +118,7 @@ def check_source(url: str) -> dict:
 
     opener = urllib.request.build_opener(_GuardedRedirects)
     req = urllib.request.Request(url, method="HEAD",
-                                 headers={"User-Agent": "EchoRead/1.0"})
+                                 headers={"User-Agent": "Playhead/1.0"})
     try:
         with opener.open(req, timeout=10) as r:
             ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -137,10 +137,10 @@ def check_source(url: str) -> dict:
                               f"which is not an audio file")
         return {"content_type": "", "bytes": 0}
 
-    if length and length > MAX_SOURCE_BYTES:
+    if length and length > max_bytes:
         raise RejectedURL(
             f"that file is {length / 1e6:.0f} MB, and the ceiling here is "
-            f"{MAX_SOURCE_BYTES // 1_000_000} MB. Try a single chapter.")
+            f"{max_bytes // 1_000_000} MB. Try a single chapter.")
     # Plenty of hosts serve audio as octet-stream, so only a confidently wrong
     # type is rejected.
     if ctype and not (ctype.startswith("audio/") or ctype.startswith("video/")
@@ -226,7 +226,7 @@ class BookRecord:
 
 
 def _key(book_id: str, part: str = "meta") -> str:
-    return f"echoread:book:{book_id}:{part}"
+    return f"playhead:book:{book_id}:{part}"
 
 
 def load(store, book_id: str) -> Optional[BookRecord]:
@@ -244,7 +244,7 @@ def save(store, rec: BookRecord) -> None:
 
 
 def _shelf_key(client_id: str) -> str:
-    return f"echoread:books:{client_id or 'anon'}"
+    return f"playhead:books:{client_id or 'anon'}"
 
 
 def create(store, title: str, audio_url: str, aai_key: str, client_id: str = "") -> BookRecord:
@@ -302,7 +302,15 @@ def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
     t = _aai(f"/transcript/{rec.transcript_id}", aai_key)
     status = t.get("status")
     if status == "error":
-        return _fail(store, rec, t.get("error", "transcription failed"))
+        err = t.get("error", "transcription failed")
+        # archive.org in particular will 503 a file it served happily a minute
+        # earlier. That is worth saying out loud, because "failed" invites
+        # someone to go hunting for a different link when the same one works
+        # on a second try.
+        if "download" in err.lower() or "unable to" in err.lower():
+            err = ("the host would not hand over the file just then. "
+                   "That is usually temporary - try it again.")
+        return _fail(store, rec, err)
     if status != "completed":
         return rec
 
@@ -313,7 +321,7 @@ def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
     chunks = _chunks_from(payload)
     if not chunks:
         return _fail(store, rec, "there is no speech in that recording - "
-                                 "EchoRead needs someone reading out loud.")
+                                 "Playhead needs someone reading out loud.")
 
     # Music, ambience and silence all transcribe to almost nothing spread over a
     # long duration. Indexing that produces a book the agent cannot answer from,
@@ -323,7 +331,7 @@ def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
     if density < MIN_CHARS_PER_MINUTE:
         return _fail(store, rec,
                      f"that recording has very little speech in it "
-                     f"({density:.0f} characters a minute). EchoRead indexes "
+                     f"({density:.0f} characters a minute). Playhead indexes "
                      f"narration - music or ambience gives it nothing to answer from.")
 
     chunks = chunks[:MAX_CHUNKS]
@@ -346,7 +354,7 @@ def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
 
 
 def _chunks_from(payload: dict) -> List[Chunk]:
-    from echoread.library import Library
+    from playhead.library import Library
     return Library.chunks_from_transcript(payload)
 
 

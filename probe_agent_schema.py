@@ -23,8 +23,8 @@ def post(body):
 if __name__ == "__main__":
     for label, body in [
         ("empty", {}),
-        ("name only", {"name": "echoread-probe"}),
-        ("name+prompt", {"name": "echoread-probe", "system_prompt": "You help."}),
+        ("name only", {"name": "playhead-probe"}),
+        ("name+prompt", {"name": "playhead-probe", "system_prompt": "You help."}),
     ]:
         code, detail = post(body)
         print(f"--- {label}: {code}")

@@ -13,7 +13,7 @@ import websockets
 
 load_dotenv()
 KEY = os.environ["ASSEMBLYAI_API_KEY"]
-AGENT_ID = os.environ["ECHOREAD_AGENT_ID"]
+AGENT_ID = os.environ["PLAYHEAD_AGENT_ID"]
 RATE = 24000
 
 

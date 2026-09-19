@@ -11,7 +11,7 @@ import websockets
 
 load_dotenv()
 KEY = os.environ["ASSEMBLYAI_API_KEY"]
-AGENT_ID = os.getenv("ECHOREAD_AGENT_ID", "")
+AGENT_ID = os.getenv("PLAYHEAD_AGENT_ID", "")
 
 
 def mint():

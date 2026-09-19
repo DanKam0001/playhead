@@ -1,4 +1,4 @@
-"""EchoRead: play an audiobook, interrupt it with your voice, discuss it.
+"""Playhead: play an audiobook, interrupt it with your voice, discuss it.
 
     python run_demo.py audio/relativity.wav --device 3 --start 9:20
 
@@ -8,11 +8,11 @@ answers out loud; without, it runs ear-only and just prints the question.
 import sys
 from pathlib import Path
 
-from echoread.config import Settings
-from echoread.ears import Ears
-from echoread.mic import Microphone
-from echoread.player import AudiobookPlayer
-from echoread.session import Session
+from playhead.config import Settings
+from playhead.ears import Ears
+from playhead.mic import Microphone
+from playhead.player import AudiobookPlayer
+from playhead.session import Session
 
 # Fallback only. Real keyterms are derived from the book by build_index.py and
 # loaded from data/<name>.keyterms.json -- hardcoding does not survive a
@@ -45,15 +45,15 @@ def main() -> int:
     brain = voice = None
     db = Path("data") / f"{player.path.stem}.db"
     if db.exists() and settings.gemini_api_key:
-        from echoread.brain import Brain
-        from echoread.library import Library
+        from playhead.brain import Brain
+        from playhead.library import Library
         lib = Library(db)
         brain = Brain(settings.gemini_api_key, lib)
         print(f"[demo] index: {len(lib)} chunks from {db}")
     else:
         print(f"[demo] no index at {db} -- run build_index.py first. Ear-only mode.")
     if settings.elevenlabs_api_key:
-        from echoread.voice import ElevenLabsVoice
+        from playhead.voice import ElevenLabsVoice
         voice = ElevenLabsVoice(settings.elevenlabs_api_key, settings.elevenlabs_voice_id)
     else:
         print("[demo] no ElevenLabs key -- replies will be printed, not spoken.")

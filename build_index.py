@@ -13,8 +13,8 @@ from pathlib import Path
 import assemblyai as aai
 from dotenv import load_dotenv
 
-from echoread.brain import GeminiEmbedder
-from echoread.library import Library
+from playhead.brain import GeminiEmbedder
+from playhead.library import Library
 
 load_dotenv()
 

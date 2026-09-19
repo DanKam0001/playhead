@@ -2,9 +2,9 @@
 import os, time
 from dotenv import load_dotenv
 load_dotenv()
-from echoread.brain import Brain
-from echoread.library import Library
-from echoread.voice import ElevenLabsVoice
+from playhead.brain import Brain
+from playhead.library import Library
+from playhead.voice import ElevenLabsVoice
 
 Q, T = "Wait, what did that last sentence mean?", 30.0
 

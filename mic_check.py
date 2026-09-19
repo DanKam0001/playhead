@@ -17,7 +17,7 @@ import numpy as np
 import sounddevice as sd
 from assemblyai.streaming.v3.extras import EnergyVad
 
-from echoread.config import (ATTACK_FRAMES, CHANNELS, FRAME_SAMPLES,
+from playhead.config import (ATTACK_FRAMES, CHANNELS, FRAME_SAMPLES,
                              MIN_TRIGGER_RMS, SAMPLE_RATE)
 
 BAR_W = 34

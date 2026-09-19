@@ -1,4 +1,4 @@
-// EchoRead browser client.
+// Playhead browser client.
 //
 // The websocket runs here, not in the backend: the server mints a short-lived
 // token and the browser connects straight to AssemblyAI. The API key never
@@ -124,7 +124,7 @@ function applySeek(seconds) {
   // backing up 3 s from a deliberate jump is just wrong.
   justSeeked = true;
   debug(`jumped to ${clockText(seconds)}`);
-  turn("echoread", "Jumped to " + clockText(seconds), "system");
+  turn("playhead", "Jumped to " + clockText(seconds), "system");
 }
 
 // ---------- the spine ----------
@@ -218,8 +218,25 @@ function seekFromEvent(e) {
 let notes = [];
 let pendingQ = null;
 
-const notesKey = () => "echoread:notes:" + (currentBook ? currentBook.id : "relativity");
-const posKey = () => "echoread:pos:" + (currentBook ? currentBook.id : "relativity");
+const notesKey = () => "playhead:notes:" + (currentBook ? currentBook.id : "relativity");
+const posKey = () => "playhead:pos:" + (currentBook ? currentBook.id : "relativity");
+
+// The product was called EchoRead until 2026-09-19. Anyone who used it before
+// then has notes under the old prefix, and a rename that silently eats them is
+// the worst kind of bug: invisible, and only to the people who used it most.
+function migrateOldKeys() {
+  try {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith("echoread:"))
+      .forEach((k) => {
+        const moved = "playhead:" + k.slice("echoread:".length);
+        if (localStorage.getItem(moved) === null) {
+          localStorage.setItem(moved, localStorage.getItem(k));
+        }
+        localStorage.removeItem(k);
+      });
+  } catch (_) { /* no storage at all is fine; there is nothing to migrate */ }
+}
 
 // Private windows and blocked site data make these throw rather than return
 // empty, so every access is guarded and the page works with no storage at all.
@@ -258,7 +275,7 @@ function renderNotes() {
 }
 
 function exportNotes() {
-  const lines = ["# EchoRead notes", "",
+  const lines = ["# Playhead notes", "",
                  "Book: " + (currentBook ? currentBook.title : "relativity"),
                  "Exported: " + new Date().toLocaleString(), ""];
   notes.forEach((n) => {
@@ -266,13 +283,13 @@ function exportNotes() {
   });
   // A machine-readable copy rides along in a comment, so one file is both
   // pleasant to read and importable.
-  lines.push("<!-- echoread:data " + JSON.stringify(notes) + " -->");
+  lines.push("<!-- playhead:data " + JSON.stringify(notes) + " -->");
 
   const blob = new Blob([lines.join(String.fromCharCode(10))], { type: "text/markdown" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "echoread-notes.md";
+  a.download = "playhead-notes.md";
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -281,8 +298,13 @@ function exportNotes() {
 
 async function importNotes(file) {
   const text = await file.text();
-  const marker = "<!-- echoread:data ";
-  const i = text.indexOf(marker);
+  // Files exported before the rename carry the old marker; still read them.
+  let marker = "<!-- playhead:data ";
+  let i = text.indexOf(marker);
+  if (i < 0) {
+    marker = "<!-- echoread:data ";
+    i = text.indexOf(marker);
+  }
   let incoming = null;
   try {
     incoming = i >= 0
@@ -291,7 +313,7 @@ async function importNotes(file) {
   } catch (_) { incoming = null; }
 
   if (!Array.isArray(incoming)) {
-    setStatus("no EchoRead notes in that file", "error");
+    setStatus("no Playhead notes in that file", "error");
     return;
   }
   const seen = new Set(notes.map((n) => n.t + "|" + n.q));
@@ -337,6 +359,7 @@ function offerResume() {
 let currentBook = null;
 let shelf = [];
 let suggested = [];
+let limits = { upload_mb: 4, source_mb: 150 };   // replaced by the server's own
 let localAudio = {};     // book id -> object URL, for files added this session
 let needsFile = false;   // the selected book came from a file we no longer hold
 
@@ -344,10 +367,10 @@ let needsFile = false;   // the selected book came from a file we no longer hold
 // shelf would put whatever a stranger added on the front page of a live demo.
 // An identifier, not a credential -- it guards tidiness, not secrets.
 function clientId() {
-  let id = storageGet("echoread:client", null);
+  let id = storageGet("playhead:client", null);
   if (!id) {
     id = "c" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    storageSet("echoread:client", id);
+    storageSet("playhead:client", id);
   }
   return id;
 }
@@ -365,11 +388,13 @@ async function loadShelf() {
     const data = await (await fetch("/api/books", { headers: withClient() })).json();
     shelf = data.books || [];
     suggested = data.suggested || [];
+    if (data.limits) limits = data.limits;
   } catch (_) { shelf = []; }
   renderShelf();
   renderSuggested();
+  renderLimits();
   if (!currentBook) {
-    const saved = storageGet("echoread:book", null);
+    const saved = storageGet("playhead:book", null);
     const pick = shelf.find((b) => b.id === saved) || shelf[0];
     if (pick) selectBook(pick, true);
   }
@@ -415,13 +440,29 @@ function renderShelf() {
       selectBook(b);
     });
     li.appendChild(btn);
+
+    // A failed book is usually a host that would not hand the file over, so
+    // the useful control is "try again", not a dead row.
+    if (b.status === "failed" && b.audio_url) {
+      const again = document.createElement("button");
+      again.className = "retry";
+      again.type = "button";
+      again.textContent = "Try again";
+      again.addEventListener("click", (e) => {
+        e.stopPropagation();
+        shelf = shelf.filter((x) => x.id !== b.id);
+        renderShelf();
+        addByUrl(b.audio_url, b.title);
+      });
+      li.appendChild(again);
+    }
     list.appendChild(li);
   });
 }
 
 function selectBook(b, quiet) {
   currentBook = b;
-  storageSet("echoread:book", b.id);
+  storageSet("playhead:book", b.id);
   el("booktitle").textContent = b.title;
 
   const src = b.audio_url || localAudio[b.id] || "";
@@ -451,6 +492,13 @@ function selectBook(b, quiet) {
   // Tell the backend straight away, so a question asked before the first
   // heartbeat still reaches the right book.
   if (session) reportPlayhead();
+}
+
+function renderLimits() {
+  const drop = el("droplimit");
+  if (drop) drop.textContent = `(up to ${limits.upload_mb} MB — longer books need a link)`;
+  const src = el("sourcelimit");
+  if (src) src.textContent = `${limits.source_mb} MB`;
 }
 
 function renderSuggested() {
@@ -540,11 +588,13 @@ async function addByFile(file) {
     addStatus("Playing “" + currentBook.title + "” from your copy.");
     return;
   }
-  // The platform caps a request body at 4.5 MB. Checking here means an
-  // oversized file gets a useful sentence instead of an edge-level failure.
-  if (file.size > 4_400_000) {
-    addStatus("That file is " + (file.size / 1e6).toFixed(1) + " MB, and uploads here stop at 4 MB. "
-      + "Put it somewhere with a direct link (archive.org, Dropbox, S3) and paste the link above.", true);
+  // Checked here so an oversized file gets a sentence instead of an
+  // edge-level failure. The ceiling comes from the deployment, not from this
+  // file, so raising the setting moves the check and the wording together.
+  if (file.size > limits.upload_mb * 1e6) {
+    addStatus("That file is " + (file.size / 1e6).toFixed(1) + " MB, and uploads here stop at "
+      + limits.upload_mb + " MB. Put it somewhere with a direct link "
+      + "(archive.org, Dropbox, S3) and paste the link above.", true);
     return;
   }
   addStatus("Uploading …");
@@ -781,7 +831,7 @@ async function start() {
         break;
 
       case "transcript.agent":
-        turn("echoread", m.text || "");
+        turn("playhead", m.text || "");
         noteAnswer(m.text || "");
         break;
 
@@ -892,6 +942,7 @@ el("clearnotes").addEventListener("click", () => {
   renderNotes();
 });
 
+migrateOldKeys();
 notes = storageGet(notesKey(), []);
 renderNotes();
 paintSpine();

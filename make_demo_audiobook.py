@@ -1,7 +1,7 @@
 """Generate a short technical 'audiobook' to develop and demo against."""
 import os
 from dotenv import load_dotenv
-from echoread.voice import ElevenLabsVoice
+from playhead.voice import ElevenLabsVoice
 
 load_dotenv()
 

@@ -112,15 +112,15 @@ print("store kind:", store.kind)
 
 # --- a big value through the JSON-body path ---
 big = "x" * 210_000
-store.kv_set("echoread:test:big", big, ttl=60)
-back = store.kv_get("echoread:test:big")
+store.kv_set("playhead:test:big", big, ttl=60)
+back = store.kv_get("playhead:test:big")
 assert back == big, f"round trip lost data: {len(back or '')} vs {len(big)}"
 print("PASS 200KB value round trip")
 
 # --- the shelf list ---
-store.kv_push("echoread:test:list", "a")
-store.kv_push("echoread:test:list", "b")
-assert store.kv_list("echoread:test:list", 10) == ["b", "a"], store.kv_list("echoread:test:list", 10)
+store.kv_push("playhead:test:list", "a")
+store.kv_push("playhead:test:list", "b")
+assert store.kv_list("playhead:test:list", 10) == ["b", "a"], store.kv_list("playhead:test:list", 10)
 print("PASS lpush/lrange ordering")
 
 # --- a whole book, built the way the pipeline builds one ---

@@ -16,7 +16,7 @@ WAV = "audio/_probe_question.wav"
 def synth():
     if os.path.exists(WAV):
         return
-    from echoread.voice import ElevenLabsVoice
+    from playhead.voice import ElevenLabsVoice
     v = ElevenLabsVoice(os.environ["ELEVENLABS_API_KEY"],
                         os.getenv("ELEVENLABS_VOICE_ID", ""))
     v.to_wav(QUESTION, WAV)

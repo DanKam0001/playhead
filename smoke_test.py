@@ -3,8 +3,8 @@ import time
 import numpy as np
 import soundfile as sf
 
-from echoread.player import AudiobookPlayer
-from echoread.session import Session, State
+from playhead.player import AudiobookPlayer
+from playhead.session import Session, State
 
 
 def make_tone(path="audio/_test_tone.wav", secs=30, sr=22050):
@@ -81,7 +81,7 @@ def main():
     assert s2.state is State.PLAYING, s2.state
 
     # --- turn stitching: a paused question must not fire the brain early ---
-    from echoread import session as S
+    from playhead import session as S
     p4 = AudiobookPlayer(path); p4._stream = FakeStream()
     asked = []
     s3 = Session(player=p4, ears=None, mic=NoMic())
@@ -161,8 +161,8 @@ def main():
     assert not tuned.process(cabin()).active, "must release after speech ends"
 
     # --- barge-in trigger must survive a silent calibration ---
-    from echoread.mic import Microphone
-    from echoread.config import FRAME_SAMPLES, ATTACK_FRAMES
+    from playhead.mic import Microphone
+    from playhead.config import FRAME_SAMPLES, ATTACK_FRAMES
     from assemblyai.streaming.v3.extras import EnergyVad as EV
 
     # Real numbers measured on hardware 2026-09-10.

@@ -21,15 +21,15 @@ from typing import Optional, Protocol
 # Playhead entries expire rather than accumulating. Comfortably longer than a
 # session, short enough that abandoned ones clear themselves out.
 TTL_SECONDS = 3600
-LATEST_KEY = "echoread:latest"
-SEEK_LATEST_KEY = "echoread:seek:latest"
-CTX_LATEST_KEY = "echoread:ctx:latest"
+LATEST_KEY = "playhead:latest"
+SEEK_LATEST_KEY = "playhead:seek:latest"
+CTX_LATEST_KEY = "playhead:ctx:latest"
 # A requested jump is consumed once. Leaving it set would drag the
 # listener back to the same spot on every heartbeat.
 SEEK_TTL_SECONDS = 30
 
 
-BOOK_LATEST_KEY = "echoread:bk:latest"
+BOOK_LATEST_KEY = "playhead:bk:latest"
 # A book someone added is theirs for a month. Long enough to come back to,
 # short enough that the store does not grow forever on a free tier.
 BOOK_TTL_SECONDS = 30 * 24 * 3600
@@ -172,13 +172,13 @@ class RedisStore:
 
     def set(self, session_id: str, seconds: float) -> None:
         value = str(seconds)
-        self._cmd("set", f"echoread:ph:{session_id}", value, "EX", str(TTL_SECONDS))
+        self._cmd("set", f"playhead:ph:{session_id}", value, "EX", str(TTL_SECONDS))
         # Mirror to a well-known key so a tool call with no session id still
         # has something correct to read.
         self._cmd("set", LATEST_KEY, value, "EX", str(TTL_SECONDS))
 
     def get(self, session_id: Optional[str]) -> Optional[float]:
-        for key in ([f"echoread:ph:{session_id}"] if session_id else []) + [LATEST_KEY]:
+        for key in ([f"playhead:ph:{session_id}"] if session_id else []) + [LATEST_KEY]:
             try:
                 raw = self._cmd("get", key)
             except Exception as exc:
@@ -193,7 +193,7 @@ class RedisStore:
 
     def request_seek(self, session_id: Optional[str], seconds: float) -> None:
         value = str(seconds)
-        keys = ([f"echoread:seek:{session_id}"] if session_id else []) + [SEEK_LATEST_KEY]
+        keys = ([f"playhead:seek:{session_id}"] if session_id else []) + [SEEK_LATEST_KEY]
         for key in keys:
             try:
                 self._cmd("set", key, value, "EX", str(SEEK_TTL_SECONDS))
@@ -203,7 +203,7 @@ class RedisStore:
     def take_seek(self, session_id: Optional[str]) -> Optional[float]:
         # GETDEL, so the jump happens once and the listener keeps control
         # afterwards.
-        for key in ([f"echoread:seek:{session_id}"] if session_id else []) + [SEEK_LATEST_KEY]:
+        for key in ([f"playhead:seek:{session_id}"] if session_id else []) + [SEEK_LATEST_KEY]:
             try:
                 raw = self._cmd("getdel", key)
             except Exception as exc:
@@ -223,14 +223,14 @@ class RedisStore:
         return None
 
     def set_context(self, session_id: Optional[str], text: str) -> None:
-        for key in ([f"echoread:ctx:{session_id}"] if session_id else []) + [CTX_LATEST_KEY]:
+        for key in ([f"playhead:ctx:{session_id}"] if session_id else []) + [CTX_LATEST_KEY]:
             try:
                 self._cmd("set", key, text, "EX", str(TTL_SECONDS))
             except Exception as exc:
                 print(f"[store] redis context set failed: {exc}")
 
     def get_context(self, session_id: Optional[str]) -> Optional[str]:
-        for key in ([f"echoread:ctx:{session_id}"] if session_id else []) + [CTX_LATEST_KEY]:
+        for key in ([f"playhead:ctx:{session_id}"] if session_id else []) + [CTX_LATEST_KEY]:
             try:
                 raw = self._cmd("get", key)
             except Exception as exc:
@@ -241,7 +241,7 @@ class RedisStore:
         return None
 
     def set_book(self, session_id: Optional[str], book_id: str) -> None:
-        keys = ([f"echoread:bk:{session_id}"] if session_id else []) + [BOOK_LATEST_KEY]
+        keys = ([f"playhead:bk:{session_id}"] if session_id else []) + [BOOK_LATEST_KEY]
         for key in keys:
             try:
                 self._cmd("set", key, book_id, "EX", str(TTL_SECONDS))
@@ -249,7 +249,7 @@ class RedisStore:
                 print(f"[store] redis book set failed: {exc}")
 
     def get_book(self, session_id: Optional[str]) -> Optional[str]:
-        for key in ([f"echoread:bk:{session_id}"] if session_id else []) + [BOOK_LATEST_KEY]:
+        for key in ([f"playhead:bk:{session_id}"] if session_id else []) + [BOOK_LATEST_KEY]:
             try:
                 raw = self._cmd("get", key)
             except Exception as exc:

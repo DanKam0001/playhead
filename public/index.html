@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EchoRead</title>
+<title>Playhead</title>
 <meta name="description" content="An audiobook you can interrupt. Ask about what you just heard.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -199,7 +199,7 @@
     margin:0; font-size:16px; font-weight:500;
     border-left:2px solid var(--mark); padding-left:13px; margin-left:-15px;
   }
-  .turn.echoread .body p{
+  .turn.playhead .body p{
     margin:0; font-family:var(--serif); font-size:18.5px; line-height:1.62;
   }
   .turn.partial{opacity:.5}
@@ -239,6 +239,10 @@
   .shelf .bar{grid-column:1/-1; height:3px; background:var(--sunk); border-radius:2px}
   .shelf .bar i{display:block; height:100%; background:var(--live); border-radius:2px;
                 transition:width .4s}
+  .shelf .retry{display:block; width:100%; text-align:left; background:none;
+                border:0; border-top:1px dashed var(--rule-2);
+                padding:8px 14px; font-size:12px; color:var(--mark)}
+  .shelf .retry:hover{background:var(--mark-soft)}
 
   .addrow{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px}
   .addrow input[type=url], .addrow input[type=text]{
@@ -298,7 +302,7 @@
     .wordmark{font-size:20px}
     .nowplaying{order:3; flex-basis:100%; min-width:0}
     .turn{grid-template-columns:44px minmax(0,1fr); gap:0 12px}
-    .turn.echoread .body p{font-size:17px}
+    .turn.playhead .body p{font-size:17px}
     .lede{font-size:17px}
     .sheet{padding:16px}
     /* Anything tappable clears the 44px target iOS asks for. */
@@ -316,7 +320,7 @@
 <body>
 
 <header>
-  <h1 class="wordmark">Echo<em>Read</em></h1>
+  <h1 class="wordmark">Play<em>head</em></h1>
   <p class="nowplaying">Listening to <b id="booktitle">Relativity: The Special and General Theory</b></p>
   <button class="btn" id="librarybtn" aria-expanded="false" aria-controls="library">Library</button>
   <button class="btn primary" id="start">Start listening</button>
@@ -382,12 +386,12 @@
         <button class="btn primary" id="addbtn" type="button">Add</button>
       </div>
       <label id="drop" for="filepick">
-        &hellip; or drop an audio file here <span style="opacity:.7">(up to 4&nbsp;MB &mdash; longer books need a link)</span>
+        &hellip; or drop an audio file here <span style="opacity:.7" id="droplimit">(up to 4&nbsp;MB &mdash; longer books need a link)</span>
         <input id="filepick" type="file" accept="audio/*" class="vh">
       </label>
       <p id="addstatus" role="status"></p>
       <p class="fineprint">
-        EchoRead transcribes the audio with AssemblyAI, cuts it at the reader&rsquo;s own
+        Playhead transcribes the audio with AssemblyAI, cuts it at the reader&rsquo;s own
         pauses, and embeds each passage against its timestamp &mdash; the same index the
         shipped book uses. A chapter takes a minute or two.
         Try any recording from
@@ -399,7 +403,7 @@
     <div id="transcript">
       <p class="lede">Press <b>Start listening</b>, let it play, then just talk over it.
         Try <b>&ldquo;wait, what did that last part mean?&rdquo;</b> &mdash; the question names
-        no topic, so there is nothing to search for. EchoRead answers it from where you
+        no topic, so there is nothing to search for. Playhead answers it from where you
         are in the audio.</p>
       <p class="lede">Or say <b>&ldquo;take me to the part about the train&rdquo;</b> and the
         book moves there.</p>

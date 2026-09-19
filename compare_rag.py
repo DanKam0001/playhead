@@ -21,8 +21,8 @@ import sys
 
 from dotenv import load_dotenv
 
-from echoread.brain import Brain, GeminiEmbedder, is_deictic
-from echoread.library import Library
+from playhead.brain import Brain, GeminiEmbedder, is_deictic
+from playhead.library import Library
 
 load_dotenv()
 
@@ -90,7 +90,7 @@ def run_one(naive: NaiveRag, brain: Brain, t: float, question: str) -> None:
     except Exception as exc:
         print(f"   FAILED: {type(exc).__name__}: {str(exc)[:140]}")
 
-    print("\n-- ECHOREAD (position window, capped at the playhead) " + "-" * 23)
+    print("\n-- PLAYHEAD (position window, capped at the playhead) " + "-" * 23)
     try:
         a = brain.answer(question, t)
         near, far = brain.last_context

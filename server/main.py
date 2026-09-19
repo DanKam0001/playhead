@@ -1,4 +1,4 @@
-"""EchoRead backend: mints session tokens and serves the one tool that matters.
+"""Playhead backend: mints session tokens and serves the one tool that matters.
 
 The shape here follows AssemblyAI's stored-agent + HTTP-tools pattern, so this
 backend holds **no** websocket to AssemblyAI, no tool dispatcher, and no session
@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from echoread.library import Library
+from playhead.library import Library
 
 from . import books
 from .store import build_store
@@ -36,14 +36,38 @@ load_dotenv()
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
-BOOK = os.getenv("ECHOREAD_BOOK", "relativity")
+
+
+def _setting(name: str, default: str = "") -> str:
+    """Read PLAYHEAD_<name>, falling back to the old ECHOREAD_<name>.
+
+    The project was called EchoRead until 2026-09-19. Accepting both means a
+    running deployment does not go dark between this code landing and its
+    environment variables being renamed. The fallback can be deleted once
+    Vercel only has PLAYHEAD_* set.
+    """
+    return (os.getenv(f"PLAYHEAD_{name}")
+            or os.getenv(f"ECHOREAD_{name}")
+            or default)
+
+
+BOOK = _setting("BOOK", "relativity")
 # Read lazily-tolerant: a missing key should surface as a clear 500 on the
 # one endpoint that needs it, not as an import-time crash that takes the
 # whole function down and reports nothing useful.
 AAI_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
-AGENT_ID = os.getenv("ECHOREAD_AGENT_ID", "")
+AGENT_ID = _setting("AGENT_ID", "")
 
-app = FastAPI(title="EchoRead")
+# How much audio may be sent through this deployment, as settings rather than
+# constants -- a bigger host, or a self-hosted one, should be able to raise
+# them without touching code. Note the upload ceiling is only ours down to
+# whatever the platform itself enforces: Vercel rejects a request body over
+# ~4.5 MB at the edge, before any of this runs. Raising MAX_UPLOAD_MB past that
+# only helps somewhere without that cap.
+MAX_UPLOAD_MB = float(_setting("MAX_UPLOAD_MB", "4"))
+MAX_SOURCE_MB = float(_setting("MAX_SOURCE_MB", "150"))
+
+app = FastAPI(title="Playhead")
 library = Library(ROOT / "data" / f"{BOOK}.db")
 playheads = build_store()
 
@@ -124,7 +148,7 @@ def new_session():
     if not AAI_KEY:
         raise HTTPException(500, "ASSEMBLYAI_API_KEY is not set on this deployment.")
     if not AGENT_ID:
-        raise HTTPException(500, "ECHOREAD_AGENT_ID is not set. Run scripts/create_agent.py.")
+        raise HTTPException(500, "PLAYHEAD_AGENT_ID is not set. Run scripts/create_agent.py.")
     url = ("https://agents.assemblyai.com/v1/token"
            "?expires_in_seconds=300&max_session_duration_seconds=1800")
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {AAI_KEY}"})
@@ -226,7 +250,7 @@ def go_to_topic(call: TopicCall):
 def _embed(query: str):
     """One embedding, or None if embeddings are unavailable."""
     try:
-        from echoread.brain import GeminiEmbedder
+        from playhead.brain import GeminiEmbedder
         key = os.getenv("GEMINI_API_KEY", "")
         if not key:
             return None
@@ -259,7 +283,7 @@ class NewBook(BaseModel):
 def _embedder():
     """The Gemini embedder, or None if this deployment has no key."""
     try:
-        from echoread.brain import GeminiEmbedder
+        from playhead.brain import GeminiEmbedder
         key = os.getenv("GEMINI_API_KEY", "")
         return GeminiEmbedder(key) if key else None
     except Exception as exc:
@@ -316,7 +340,7 @@ def _rate_limit(request: Request) -> None:
     """
     ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or "unknown"
     try:
-        n = playheads.kv_incr(f"echoread:rate:{ip}", 3600)
+        n = playheads.kv_incr(f"playhead:rate:{ip}", 3600)
     except Exception as exc:
         print(f"[rate] check failed, allowing: {exc}")
         return
@@ -329,7 +353,10 @@ def _rate_limit(request: Request) -> None:
 def list_books(request: Request):
     """The shipped book, then this browser's own, then things worth trying."""
     return {"books": [_builtin_card()] + books.shelf(playheads, _client_id(request)),
-            "suggested": SUGGESTED}
+            "suggested": SUGGESTED,
+            # The page reads its own ceilings from here rather than hardcoding
+            # them, so raising a setting moves the check and the wording with it.
+            "limits": {"upload_mb": MAX_UPLOAD_MB, "source_mb": MAX_SOURCE_MB}}
 
 
 @app.post("/api/books")
@@ -348,7 +375,7 @@ def add_book(new: NewBook, request: Request):
         # Checked before anything is fetched or queued: this runs from our own
         # server, so an unvalidated link is a request forgery, and an unbounded
         # one is someone else's transcription bill.
-        books.check_source(url)
+        books.check_source(url, int(MAX_SOURCE_MB * 1_000_000))
         _rate_limit(request)
         rec = books.create(playheads, new.title or _title_from_url(url), url,
                            AAI_KEY, _client_id(request))
@@ -376,8 +403,10 @@ async def upload_book(request: Request):
     raw = await request.body()
     if not raw:
         raise HTTPException(400, "No audio arrived.")
-    if len(raw) > 4_400_000:
-        raise HTTPException(413, "That file is too big to upload here - paste a link to it instead.")
+    if len(raw) > MAX_UPLOAD_MB * 1_000_000:
+        raise HTTPException(413, f"That file is {len(raw) / 1e6:.1f} MB and this "
+                                 f"deployment accepts {MAX_UPLOAD_MB:g} MB - "
+                                 f"paste a link to it instead.")
     try:
         url = books.upload_bytes(raw, AAI_KEY)
         rec = books.create(playheads, title, url, AAI_KEY, _client_id(request))
