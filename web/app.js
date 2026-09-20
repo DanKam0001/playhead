@@ -163,7 +163,11 @@ function duck() {
 }
 
 function pauseBook() {
-  book.pause();
+  // Named for what it usually does. In "keep it playing" mode the book never
+  // actually stops -- it drops to 12% and carries on underneath, which is the
+  // whole point of that choice.
+  if (answerMode === "pause") book.pause();
+  else duck();
   document.body.classList.add("listening");
 }
 
@@ -337,6 +341,30 @@ function buildSpeeds() {
   slider.addEventListener("input", () => applyRate(slider.value));
   el("speedreset").addEventListener("click", () => applyRate(1));
   applyRate(Number(storageGet("playhead:rate", 1)) || 1);
+}
+
+// ---------- what the book does while the agent answers ----------
+//
+// People genuinely differ here. Pausing means you hear the answer cleanly but
+// lose the thread of the book; ducking keeps the book moving underneath but
+// you half-follow both. Neither is correct, so it is a choice rather than a
+// default someone has to work around.
+
+let answerMode = "pause";
+
+function applyAnswerMode(mode) {
+  answerMode = mode === "duck" ? "duck" : "pause";
+  storageSet("playhead:answermode", answerMode);
+  el("answermode").querySelectorAll("button").forEach((b) => {
+    b.setAttribute("aria-checked", String(b.dataset.mode === answerMode));
+  });
+}
+
+function buildAnswerMode() {
+  el("answermode").querySelectorAll("button").forEach((b) => {
+    b.addEventListener("click", () => applyAnswerMode(b.dataset.mode));
+  });
+  applyAnswerMode(storageGet("playhead:answermode", "pause"));
 }
 
 // ---------- table of contents ----------
@@ -666,6 +694,32 @@ function renderShelf() {
       selectBook(b);
     });
     li.appendChild(btn);
+
+    // Anything added can be taken off again. The index is left to expire on
+    // its own -- someone else may be holding the same book.
+    if (!b.builtin) {
+      const x = document.createElement("button");
+      x.className = "drop";
+      x.type = "button";
+      x.textContent = "×";
+      x.title = "Remove “" + b.title + "” from your shelf";
+      x.setAttribute("aria-label", x.title);
+      x.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        shelf = shelf.filter((x2) => x2.id !== b.id);
+        if (currentBook && currentBook.id === b.id) {
+          const first = shelf[0];
+          if (first) selectBook(first, true);
+        }
+        renderShelf();
+        renderSuggested();
+        try {
+          await fetch("/api/books/" + encodeURIComponent(b.id),
+                      { method: "DELETE", headers: withClient() });
+        } catch (_) { /* it is already gone from the page */ }
+      });
+      li.appendChild(x);
+    }
 
     // A failed book is usually a host that would not hand the file over, so
     // the useful control is "try again", not a dead row.
@@ -1067,10 +1121,12 @@ async function start() {
       case "reply.done":
         agentSpeaking = false;
         if (m.status === "interrupted") flushReply();
-        // Back up slightly so the run-up to the question is re-heard — unless
-        // the agent just moved us somewhere on purpose.
+        // Back up slightly so the run-up to the question is re-heard -- unless
+        // the agent just moved us somewhere on purpose, or the book never
+        // stopped, in which case rewinding would undo the continuity that was
+        // the reason for choosing that mode.
         if (justSeeked) justSeeked = false;
-        else book.currentTime = Math.max(0, book.currentTime - 3);
+        else if (answerMode === "pause") book.currentTime = Math.max(0, book.currentTime - 3);
         resumeBook();
         setPlayIcon(true);
         setStatus("listening - just talk", "live");
@@ -1191,6 +1247,7 @@ function clearConversation() {
 
 migrateOldKeys();
 buildSpeeds();
+buildAnswerMode();
 notes = storageGet(notesKey(), []);
 renderNotes();
 paintSpine();

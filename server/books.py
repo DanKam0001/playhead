@@ -297,6 +297,11 @@ def create(store, title: str, audio_url: str, aai_key: str, client_id: str = "")
     return rec
 
 
+def forget(store, book_id: str, client_id: str = "") -> None:
+    """Unlist a book for one browser. The index is left to expire on its own."""
+    store.kv_remove(_shelf_key(client_id), book_id)
+
+
 def shelf(store, client_id: str = "") -> List[dict]:
     """The books this browser added, newest first.
 

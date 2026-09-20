@@ -361,27 +361,13 @@ def _builtin_card() -> dict:
 # try without hunting for a link. These are indexed on demand into the visitor's
 # own shelf, not pre-built: it costs nothing until someone wants one, and
 # watching it index is the clearest demonstration of what this does.
-SUGGESTED = [
-    {"title": "Babbage - The first computer, by its inventor",
-     "audio_url": "https://archive.org/download/life_of_a_philosopher_1909_librivox/lifeofaphilosopher_09_babbage_64kb.mp3",
-     "note": "\"The store\" and \"the mill\" - memory and CPU, described in 1864. "
-             "Ask it what they are at 11:18"},
-    {"title": "Babbage - The Analytical Engine, part 2",
-     "audio_url": "https://archive.org/download/life_of_a_philosopher_1909_librivox/lifeofaphilosopher_10_babbage_64kb.mp3",
-     "note": "Punched cards, conditional branching, and the cost of a machine "
-             "nobody would fund"},
-    {"title": "Russell - Introduction to Mathematical Philosophy, ch. 1",
-     "audio_url": "https://archive.org/download/mathematicalphilosophy_1508_librivox/mathematicalphilosophy_01_russell_64kb.mp3",
-     "note": "What a number actually is. Sets, logic, foundations"},
-    {"title": "Poincare - Science and Hypothesis, ch. 1",
-     "audio_url": "https://archive.org/download/science_and_hypothesis_librivox/scienceandhypothesis_01_poincare_64kb.mp3",
-     "note": "On the nature of mathematical reasoning - induction and proof"},
-    {"title": "Abbott - Flatland, ch. 1-3",
-     "audio_url": "https://archive.org/download/flatland3_2603_librivox/flatland_01_abbott_64kb.mp3",
-     "note": "Dimensions, from the inside. Short"},
-    {"title": "Einstein - Relativity, ch. 10-12",
-     "audio_url": "https://archive.org/download/relativity_librivox/relativity_10-12_einstein_64kb.mp3",
-     "note": "The Lorentz transformation. Carries on from the shipped chapter"},
+SUGGESTED: list[dict] = [
+    # Deliberately empty. Anything listed here is indexed on demand into the
+    # visitor's own shelf, so it costs nothing until someone taps it -- but it
+    # is also the first thing a judge sees, so it is worth choosing rather than
+    # filling with whatever was easy to find.
+    #
+    # Shape: {"title": ..., "audio_url": <direct media link>, "note": ...}
 ]
 
 
@@ -485,6 +471,17 @@ async def upload_book(request: Request):
     out = rec.public()
     out["audio_url"] = ""
     return out
+
+
+@app.delete("/api/books/{book_id}")
+def remove_book(book_id: str, request: Request):
+    """Take a book off this browser's shelf.
+
+    The index itself is left alone: it expires on its own, and someone else
+    may be holding the same book. This unlists it for the person who asked.
+    """
+    books.forget(playheads, book_id, _client_id(request))
+    return {"ok": True}
 
 
 @app.get("/api/books/{book_id}/contents")

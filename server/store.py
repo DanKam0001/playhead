@@ -54,6 +54,7 @@ class PlayheadStore(Protocol):
     def kv_list(self, key: str, n: int = 50) -> list: ...
     def kv_incr(self, key: str, ttl: int) -> int: ...
     def kv_mget(self, keys: list) -> list: ...
+    def kv_remove(self, key: str, value: str) -> None: ...
 
 
 class MemoryStore:
@@ -135,6 +136,9 @@ class MemoryStore:
 
     def kv_mget(self, keys: list) -> list:
         return [self._kv.get(k) for k in keys]
+
+    def kv_remove(self, key: str, value: str) -> None:
+        self._lists[key] = [v for v in self._lists.get(key, []) if v != value]
 
     @property
     def kind(self) -> str:
@@ -300,6 +304,10 @@ class RedisStore:
             return []
         raw = self._post("mget", *keys, timeout=20)
         return list(raw or [None] * len(keys))
+
+    def kv_remove(self, key: str, value: str) -> None:
+        """Drop every occurrence from a list. 0 means all of them."""
+        self._post("lrem", key, "0", value)
 
     @property
     def kind(self) -> str:

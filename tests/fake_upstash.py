@@ -40,6 +40,9 @@ def run(cmd):
     if op == "lpush":
         LISTS.setdefault(cmd[1], []).insert(0, cmd[2])
         return len(LISTS[cmd[1]])
+    if op == "lrem":
+        LISTS[cmd[1]] = [v for v in LISTS.get(cmd[1], []) if v != cmd[3]]
+        return 1
     if op == "ltrim":
         LISTS[cmd[1]] = LISTS.get(cmd[1], [])[int(cmd[2]):int(cmd[3]) + 1]
         return "OK"
