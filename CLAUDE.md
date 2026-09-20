@@ -207,8 +207,8 @@ verify it with `/api/health` and the page's event log.
 - Brute-force cosine: 1.3 ms for 1800 chunks x 3072-d (a 10-hour book)
 - Gemini warm 1.3-2.5 s; cold start ~3 s extra; TTS first byte ~0.8 s
 - Total to first spoken word: ~3.1-3.9 s warm (was ~5.4 s cold)
-- Einstein chapter: 20.6 min -> 23 chunks, median 50 s / 630 chars
-- Demo book: LibriVox `relativity_librivox`, sections 7-9, public domain
+- Calculus ch.3: 17.4 min -> 20 chunks, median 50 s / 630 chars
+- Built-in book: LibriVox `calculus_made_easy_1608_librivox` ch.3, public domain
 
 ## Deployment (live 2026-09-13)
 
@@ -412,6 +412,28 @@ limitation when it comes to..."* — was split into five turns. The agent
 answered the whole thought correctly, but the page printed five stubs and filed
 five notes. `web/app.js` also stitches consecutive user transcripts into one
 turn while nothing has been answered yet (`openTurn`, reset on `reply.started`).
+
+## The shelf (changed 2026-09-20)
+
+Three tiers, on purpose:
+
+- **Built-in** — `data/calculus.*` + `public/audio/calculus.mp3`, baked into the
+  repo so a fresh clone runs with no setup. Was Einstein's *Relativity*; changed
+  because a demo should not open by announcing how clever it is. *Calculus Made
+  Easy* is a book whose whole argument is that the subject is easier than
+  mathematicians make it sound, which is nearer the point of this product.
+  Rebuild with `python build_index.py audio/<file>.mp3` and set `PLAYHEAD_BOOK`.
+- **Featured** — pre-indexed in Redis, shown to everyone, not removable.
+  `FEATURED_IDS` in `server/main.py` must match the ids in
+  `scripts/seed_featured.py`; change one without the other and the book quietly
+  vanishes off the shelf. Seed with real credentials:
+  `UPSTASH_REDIS_REST_URL=... UPSTASH_REDIS_REST_TOKEN=... python scripts/seed_featured.py`
+- **Suggested** — NOT indexed. One tap adds them, which is the demo: a book
+  that did not exist when you sat down, answering questions about itself. Keep
+  at least one here or that shot has nothing to film.
+
+**Featured books carry the standard 30-day TTL.** They will disappear a month
+after seeding. Re-run the seeder if the shelf looks short.
 
 ## Tests
 

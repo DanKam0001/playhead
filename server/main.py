@@ -351,7 +351,7 @@ def _embedder():
 
 
 def _builtin_card() -> dict:
-    return {"id": BOOK, "title": "Relativity: The Special and General Theory",
+    return {"id": BOOK, "title": _setting("BOOK_TITLE", "Calculus Made Easy, ch. 3"),
             "audio_url": f"/audio/{BOOK}.mp3", "status": "ready", "error": "",
             "progress": 100, "chunks": len(library),
             "duration": round(library.duration_hint(), 1), "builtin": True}
@@ -361,13 +361,25 @@ def _builtin_card() -> dict:
 # try without hunting for a link. These are indexed on demand into the visitor's
 # own shelf, not pre-built: it costs nothing until someone wants one, and
 # watching it index is the clearest demonstration of what this does.
+# Already transcribed and indexed, and shown to everyone. Seeded once by
+# scripts/seed_featured.py, which uses these exact ids so a re-run updates the
+# same books rather than creating strangers.
+FEATURED_IDS = [
+    "featured-russell-problems-1",
+    "featured-bennett-24hours-1",
+    "featured-wittgenstein-tractatus-1",
+]
+
+# NOT indexed. One tap adds them, which takes a minute and is the clearest
+# demonstration of what this does -- a book that did not exist when you sat
+# down, answering questions about itself.
 SUGGESTED: list[dict] = [
-    # Deliberately empty. Anything listed here is indexed on demand into the
-    # visitor's own shelf, so it costs nothing until someone taps it -- but it
-    # is also the first thing a judge sees, so it is worth choosing rather than
-    # filling with whatever was easy to find.
-    #
-    # Shape: {"title": ..., "audio_url": <direct media link>, "note": ...}
+    {"title": "Thompson - Calculus Made Easy, ch. 4",
+     "audio_url": "https://archive.org/download/calculus_made_easy_1608_librivox/calculusmadeeasy_04_thompson_64kb.mp3",
+     "note": "Carries straight on from the chapter you are listening to"},
+    {"title": "Allen - As a Man Thinketh, ch. 1",
+     "audio_url": "https://archive.org/download/as_a_man_thinketh_mc_librivox/asamanthinketh_1_allen_64kb.mp3",
+     "note": "Five minutes - indexes while you watch"},
 ]
 
 
@@ -404,10 +416,25 @@ def _rate_limit(request: Request) -> None:
                                  f"address, which is the limit here. Try again later.")
 
 
+def _featured() -> list[dict]:
+    """Ready-made books, shown to everyone. Missing ones are skipped silently:
+    a shelf that is one book short beats a page that will not load."""
+    out = []
+    for book_id in FEATURED_IDS:
+        rec = books.load(playheads, book_id)
+        if rec and rec.status == "ready":
+            card = rec.public()
+            card["featured"] = True      # not removable; it is not their book
+            out.append(card)
+    return out
+
+
 @app.get("/api/books")
 def list_books(request: Request):
-    """The shipped book, then this browser's own, then things worth trying."""
-    return {"books": [_builtin_card()] + books.shelf(playheads, _client_id(request)),
+    """The shipped book, the featured ones, then this browser's own."""
+    mine = books.shelf(playheads, _client_id(request))
+    featured = [f for f in _featured() if f["id"] not in {b["id"] for b in mine}]
+    return {"books": [_builtin_card()] + featured + mine,
             "suggested": SUGGESTED,
             # The page reads its own ceilings from here rather than hardcoding
             # them, so raising a setting moves the check and the wording with it.

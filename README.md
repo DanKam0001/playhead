@@ -49,7 +49,7 @@ Two rules fall out of it:
 
 ## Bring your own audiobook
 
-The shipped Einstein chapter is a demo, not the product. Paste a direct link to
+The shipped Calculus chapter is a demo, not the product. Paste a direct link to
 any audio file — or drop a short one in — and Playhead builds it the same index
 it uses for its own book:
 
@@ -190,9 +190,9 @@ table; a 44-hour book still searches in under a tenth of a second, which is
 what justified brute-force cosine over a vector database.
 
 
-- Einstein chapter: **20.6 min → 23 chunks**, median 50 s / 630 chars
+- Calculus Made Easy ch.3: **17.4 min → 20 chunks**, median 50 s / 630 chars
 - Brute-force cosine: **1.3 ms** for 1800 chunks × 3072-d
-- Demo book: LibriVox *Relativity: The Special and General Theory*, §7–9 — public domain
+- Built-in book: LibriVox *Calculus Made Easy* ch.3 (Silvanus Thompson) — public domain
 
 ## Run it locally
 

@@ -697,7 +697,7 @@ function renderShelf() {
 
     // Anything added can be taken off again. The index is left to expire on
     // its own -- someone else may be holding the same book.
-    if (!b.builtin) {
+    if (!b.builtin && !b.featured) {
       const x = document.createElement("button");
       x.className = "drop";
       x.type = "button";

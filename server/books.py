@@ -288,12 +288,16 @@ def _shelf_key(client_id: str) -> str:
     return f"playhead:books:{client_id or 'anon'}"
 
 
-def create(store, title: str, audio_url: str, aai_key: str, client_id: str = "") -> BookRecord:
-    rec = BookRecord(id=slug(title), title=title.strip() or "Untitled book",
+def create(store, title: str, audio_url: str, aai_key: str, client_id: str = "",
+           book_id: str = "") -> BookRecord:
+    """Start a book. A given book_id makes it reproducible, which is what the
+    featured shelf needs -- otherwise every re-seed makes a new stranger."""
+    rec = BookRecord(id=book_id or slug(title), title=title.strip() or "Untitled book",
                      audio_url=audio_url, created=time.time())
     rec.transcript_id = start_transcription(audio_url, aai_key)
     save(store, rec)
-    store.kv_push(_shelf_key(client_id), rec.id)
+    if client_id:
+        store.kv_push(_shelf_key(client_id), rec.id)
     return rec
 
 

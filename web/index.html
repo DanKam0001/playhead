@@ -68,8 +68,7 @@
     margin:0;
   }
   .wordmark em{font-style:italic; color:var(--mark)}
-  /* Names the broken thing everyone already does. You rewind because you have
-     no other move, and it replays the words that already failed. */
+  /* The whole loop in three words, in the order it happens. */
   .tagline{
     margin:0; font-family:var(--serif); font-style:italic; font-size:15px;
     color:var(--mark); white-space:nowrap;
@@ -457,8 +456,8 @@
 
 <header>
   <h1 class="wordmark">Play<em>head</em></h1>
-  <p class="tagline">Never rewind again.</p>
-  <p class="nowplaying">Playing <b id="booktitle">Relativity: The Special and General Theory</b></p>
+  <p class="tagline">Listen. Interrupt. Understand.</p>
+  <p class="nowplaying">Playing <b id="booktitle">Calculus Made Easy, ch. 3</b></p>
   <button class="btn" id="librarybtn" aria-expanded="false" aria-controls="library">Library &amp; books</button>
 </header>
 
@@ -611,7 +610,7 @@
   </aside>
 </main>
 
-<audio id="book" src="/audio/relativity.mp3" preload="metadata"></audio>
+<audio id="book" src="/audio/calculus.mp3" preload="metadata"></audio>
 <script src="/static/app.js"></script>
 </body>
 </html>
