@@ -471,7 +471,20 @@ Three bugs the suite caught that live testing had not:
 - `Part 1` vanished from the fallback contents: a zero-width window at t=0
   misses a first chunk that starts half a second in.
 
-## Open and untested (as of 2026-09-19)
+## Open and untested (as of 2026-09-20)
+
+- **Multi-part playback has not been watched in a browser.** The offset
+  arithmetic is covered by `tests/test_parts.py` and verified server-side
+  against a real 3-part book, but nobody has sat through a part *boundary* in
+  the page. Watch for: the clock jumping at a handover, the spine resetting,
+  or playback stopping instead of advancing. `loadPart()` is where to look.
+- **The full Russell book (15 chapters, 4.8 h) was seeding when this session
+  ended.** Check `/api/books/featured-russell-problems-full`. If it is not
+  `ready`, re-run:
+  `UPSTASH_REDIS_REST_URL=... UPSTASH_REDIS_REST_TOKEN=... python scripts/seed_featured.py`
+  It is safe to re-run: finished books are skipped unless `--force`.
+
+## Open and untested (as of 2026-09-19, still true)
 
 - **iOS playback is fixed from the symptom, not from a device.** The cause is
   certain (see the iOS section) and the fix is the standard one, but nobody has
