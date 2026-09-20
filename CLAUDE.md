@@ -372,6 +372,9 @@ the table.
 |---|---|
 | 47-minute book, 45.7 MB | transcribed **and** indexed in **45 s** total |
 | Same book **with `auto_chapters`** | ~2 min — the feature adds real time, and is worth it |
+| **Whole book: Russell, 15 files, 4.85 h** | **392 chunks, indexed in ~12 min** |
+| Deictic question 4 hours in | correct passage, right file, ~1.8 s |
+| Topic search across 4.85 h | induction → 1h56m, a priori → 3h01m — the right chapters |
 | 35-minute book | 52 chunks, ready in ~50 s |
 | Window lookup at 2000 chunks | ~3 ms, reads 2 of 20 shards, never loads vectors |
 | Vector search, 2000 chunks (11 h) | 43 ms |
@@ -478,11 +481,9 @@ Three bugs the suite caught that live testing had not:
   against a real 3-part book, but nobody has sat through a part *boundary* in
   the page. Watch for: the clock jumping at a handover, the spine resetting,
   or playback stopping instead of advancing. `loadPart()` is where to look.
-- **The full Russell book (15 chapters, 4.8 h) was seeding when this session
-  ended.** Check `/api/books/featured-russell-problems-full`. If it is not
-  `ready`, re-run:
-  `UPSTASH_REDIS_REST_URL=... UPSTASH_REDIS_REST_TOKEN=... python scripts/seed_featured.py`
-  It is safe to re-run: finished books are skipped unless `--force`.
+- Featured books carry a 30-day TTL, so the shelf empties a month after
+  seeding. Re-run `scripts/seed_featured.py` (safe: finished books are skipped
+  unless `--force`).
 
 ## Open and untested (as of 2026-09-19, still true)
 

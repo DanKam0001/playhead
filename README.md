@@ -60,8 +60,15 @@ your link -> AssemblyAI transcription -> chunks cut at the reader's own pauses
 ```
 
 Anything on [LibriVox](https://librivox.org) or archive.org works: open a chapter
-and copy the direct MP3 link. A 17-minute chapter takes about two and a half
-minutes to transcribe and index.
+and copy the direct MP3 link.
+
+**A book can be many files.** Audiobooks are published one file per chapter, so
+`audio_urls` takes them in reading order and lays them end to end on a single
+timeline. Russell's *The Problems of Philosophy* — fifteen files, 4 hours 51
+minutes — indexes in about twelve minutes and answers a question four hours in
+from the right passage of the right file. Parts are absorbed in order, because
+each one's chunks are shifted by the total duration before it, but they
+transcribe in parallel: the wait is the slowest chapter, not the sum.
 
 Two details worth knowing:
 
@@ -179,6 +186,7 @@ Real numbers from the live deployment, not estimates.
 | | |
 |---|---|
 | 47-minute book (45.7 MB) | transcribed **and** indexed in **45 s** end to end |
+| **A whole book — 15 files, 4.85 hours** | **392 chunks, ~12 min, one continuous timeline** |
 | 35-minute book | 52 passages, ready in ~50 s |
 | Window lookup (every question) | ~3 ms locally, ~1.8 s round trip through the agent |
 | Vector search, 2000 chunks (11 h) | **43 ms** |
