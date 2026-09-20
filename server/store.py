@@ -30,6 +30,7 @@ SEEK_TTL_SECONDS = 30
 
 
 BOOK_LATEST_KEY = "playhead:bk:latest"
+BREVITY_LATEST_KEY = "playhead:brief:latest"
 # A book someone added is theirs for a month. Long enough to come back to,
 # short enough that the store does not grow forever on a free tier.
 BOOK_TTL_SECONDS = 30 * 24 * 3600
@@ -46,6 +47,10 @@ class PlayheadStore(Protocol):
     # the browser knows, the agent's tool call does not.
     def set_book(self, session_id: Optional[str], book_id: str) -> None: ...
     def get_book(self, session_id: Optional[str]) -> Optional[str]: ...
+    # How long an answer the listener wants. Same seam again: the
+    # preference lives in the browser, the agent never sees it.
+    def set_brevity(self, session_id: Optional[str], mode: str) -> None: ...
+    def get_brevity(self, session_id: Optional[str]) -> Optional[str]: ...
     # A general key/value surface, used by server/books.py to hold user-added
     # books and their indexes. Values can be a few hundred KB.
     def kv_set(self, key: str, value: str, ttl: Optional[int] = None) -> None: ...
@@ -65,6 +70,7 @@ class MemoryStore:
         self._seeks: dict[str, tuple[float, float]] = {}
         self._ctx: dict[str, str] = {}
         self._books: dict[str, str] = {}
+        self._brief: dict[str, str] = {}
         self._kv: dict[str, str] = {}
         self._lists: dict[str, list] = {}
         self._counts: dict[str, int] = {}
@@ -116,6 +122,16 @@ class MemoryStore:
         for key in ([session_id] if session_id else []) + ["latest"]:
             if key in self._books:
                 return self._books[key]
+        return None
+
+    def set_brevity(self, session_id: Optional[str], mode: str) -> None:
+        self._brief[session_id or "latest"] = mode
+        self._brief["latest"] = mode
+
+    def get_brevity(self, session_id: Optional[str]) -> Optional[str]:
+        for key in ([session_id] if session_id else []) + ["latest"]:
+            if key in self._brief:
+                return self._brief[key]
         return None
 
     def kv_set(self, key: str, value: str, ttl: Optional[int] = None) -> None:
@@ -262,6 +278,24 @@ class RedisStore:
                 raw = self._cmd("get", key)
             except Exception as exc:
                 print(f"[store] redis book get failed: {exc}")
+                return None
+            if raw:
+                return str(raw)
+        return None
+
+    def set_brevity(self, session_id: Optional[str], mode: str) -> None:
+        for key in ([f"playhead:brief:{session_id}"] if session_id else []) + [BREVITY_LATEST_KEY]:
+            try:
+                self._cmd("set", key, mode, "EX", str(TTL_SECONDS))
+            except Exception as exc:
+                print(f"[store] redis brevity set failed: {exc}")
+
+    def get_brevity(self, session_id: Optional[str]) -> Optional[str]:
+        for key in ([f"playhead:brief:{session_id}"] if session_id else []) + [BREVITY_LATEST_KEY]:
+            try:
+                raw = self._cmd("get", key)
+            except Exception as exc:
+                print(f"[store] redis brevity get failed: {exc}")
                 return None
             if raw:
                 return str(raw)

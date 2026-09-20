@@ -395,45 +395,66 @@ inside a try that retries without it, and `books.contents()` still derives a
 table of contents from the transcript when it is missing or returns fewer than
 two. Do not delete that fallback.
 
-## Turn detection (set 2026-09-19)
+## A book is a list of files (built 2026-09-20)
 
-`input.turn_detection` on the stored agent. Documented parameters are
-`vad_threshold`, `min_silence`, `max_silence`, `interrupt_response` and
-`interruption_delay`; set here to `min_silence: 700`, `max_silence: 2000`,
+A real audiobook is published one file per chapter, so a book is `parts[]` laid
+end to end on one timeline. This is the difference between indexing a chapter
+and indexing a book, and it is what makes "ask anything, anywhere in five
+hours" true rather than aspirational.
+
+**Backend** (`server/books.py`): `advance()` absorbs **one part per request** --
+it must, because each part's chunks are shifted by the total duration of
+everything before it, so they have to arrive in order. But `SUBMIT_BATCH = 8`
+queues the *next* eight transcription jobs each call, so they run in parallel on
+AssemblyAI's side. A fifteen-chapter book waits for the slowest part, not the
+sum of them.
+
+Text is written a shard at a time from a `:tail` buffer, because parts almost
+never end on a shard boundary. Times accumulate in one small list (read on
+every question). Chapters from `auto_chapters` are shifted by the same offset.
+Density is judged on **part one only** -- a silent interlude in chapter seven
+should not throw away six chapters already paid for.
+
+**Client** (`web/app.js`): everything works in *book* time. `pos()` and `seek()`
+are the only functions that know more than one file exists; `book.currentTime`
+appears nowhere else and should stay that way. `loadPart()` switches `src` and
+waits for `loadedmetadata` before seeking, because setting `currentTime` on an
+unloaded element silently does nothing.
+
+`tests/test_parts.py` covers the arithmetic. It is worth keeping because the
+failure mode is invisible: get an offset wrong and a question at 4:12:30 returns
+chapter one, and nothing else in the system notices.
+
+## Turn detection: min_silence is the lever (revised 2026-09-20)
+
+`input.turn_detection` = `min_silence: 1400`, `max_silence: 3000`,
 `interruption_delay: 300`.
 
-**The validator accepts ANY shape under `turn_detection` without complaint** —
+**Raising `max_silence` alone did nothing**, which cost a round. The endpointer
+is semantic as well as acoustic: "Are these variable conventions constant across
+all mathematics?" *sounds* finished, so it ends the turn confidently at
+`min_silence` and `max_silence` never applies. The only lever that helps someone
+still thinking is `min_silence`. It costs ~0.7 s on questions that really were
+finished, which is the right trade here.
+
+Symptom when it is too low: one thought becomes several turns, and the agent
+answers **each** of them -- three near-identical replies in a row.
+
+**The validator accepts ANY shape under `turn_detection` without complaint.**
 `{"bogus_field": 1}` and the bare string `"nonsense"` both return 200 and are
-stored verbatim. So a typo silently does nothing. Copy names from the docs, and
-verify by reading the agent back.
+stored verbatim. A typo silently does nothing. Copy names from the docs and read
+the agent back.
 
-Why: someone thinking aloud — *"I think... physical intuition is a...
-limitation when it comes to..."* — was split into five turns. The agent
-answered the whole thought correctly, but the page printed five stubs and filed
-five notes. `web/app.js` also stitches consecutive user transcripts into one
-turn while nothing has been answered yet (`openTurn`, reset on `reply.started`).
+## Per-session preferences ride the tool response
 
-## The shelf (changed 2026-09-20)
+The stored agent's system prompt is global -- one prompt for everyone -- so a
+per-listener preference cannot live there. Answer length travels the same
+out-of-band seam as the playhead: the browser reports `brevity` on the
+heartbeat, and `_length_rule()` appends an instruction to every tool response,
+which is the one per-session channel the model definitely reads.
 
-Three tiers, on purpose:
-
-- **Built-in** — `data/calculus.*` + `public/audio/calculus.mp3`, baked into the
-  repo so a fresh clone runs with no setup. Was Einstein's *Relativity*; changed
-  because a demo should not open by announcing how clever it is. *Calculus Made
-  Easy* is a book whose whole argument is that the subject is easier than
-  mathematicians make it sound, which is nearer the point of this product.
-  Rebuild with `python build_index.py audio/<file>.mp3` and set `PLAYHEAD_BOOK`.
-- **Featured** — pre-indexed in Redis, shown to everyone, not removable.
-  `FEATURED_IDS` in `server/main.py` must match the ids in
-  `scripts/seed_featured.py`; change one without the other and the book quietly
-  vanishes off the shelf. Seed with real credentials:
-  `UPSTASH_REDIS_REST_URL=... UPSTASH_REDIS_REST_TOKEN=... python scripts/seed_featured.py`
-- **Suggested** — NOT indexed. One tap adds them, which is the demo: a book
-  that did not exist when you sat down, answering questions about itself. Keep
-  at least one here or that shot has nothing to film.
-
-**Featured books carry the standard 30-day TTL.** They will disappear a month
-after seeding. Re-run the seeder if the shelf looks short.
+Any future per-listener behaviour should go the same way rather than trying to
+mutate the stored agent.
 
 ## Tests
 

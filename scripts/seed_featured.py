@@ -33,10 +33,29 @@ from server.store import build_store          # noqa: E402
 # id -> what to index. The ids match FEATURED_IDS in server/main.py; changing
 # one here without changing it there quietly drops the book off the shelf.
 FEATURED = {
-    "featured-russell-problems-1": {
-        "title": "Russell - The Problems of Philosophy, ch. 1",
-        "audio_url": "https://archive.org/download/problems_of_philosophy_librivox/"
-                     "problemsofphilosophy_01_russell_64kb.mp3",
+    # The whole book, all fifteen chapters, laid end to end on one
+    # timeline -- nearly five hours. This is the one that shows the
+    # difference between indexing a chapter and indexing a book.
+    "featured-russell-problems-full": {
+        "title": "Russell - The Problems of Philosophy (complete)",
+        "audio_urls": [
+
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_01_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_02_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_03_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_04_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_05_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_06_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_07_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_08_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_09_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_10_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_11_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_12_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_13_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_14_russell_64kb.mp3",
+            "https://archive.org/download/problems_of_philosophy_librivox/problemsofphilosophy_15_russell_64kb.mp3"
+],
     },
     "featured-bennett-24hours-1": {
         "title": "Bennett - How to Live on 24 Hours a Day, ch. 1",
@@ -62,19 +81,22 @@ def seed(store, book_id: str, spec: dict, aai_key: str, force: bool) -> str:
     if existing and existing.status == "ready" and not force:
         return f"already ready ({existing.n_chunks} chunks)"
 
-    books.check_source(spec["audio_url"], 0)
-    rec = books.create(store, spec["title"], spec["audio_url"], aai_key,
+    urls = spec.get("audio_urls") or [spec["audio_url"]]
+    for u in urls:
+        books.check_source(u, 0)
+    rec = books.create(store, spec["title"], urls, aai_key,
                        client_id="", book_id=book_id)
     emb = embedder()
 
     # Same bounded-slice loop the browser drives, just without a browser.
     started = time.time()
     while rec.status in ("transcribing", "indexing"):
-        if time.time() - started > 900:
-            return "gave up after 15 minutes"
-        time.sleep(6)
+        if time.time() - started > 2700:
+            return "gave up after 45 minutes"
+        time.sleep(8)
         rec = books.advance(store, rec, aai_key, emb)
-        print(f"      {rec.status} {rec.progress}%", end="\r", flush=True)
+        where = f"  part {rec.part_index}/{len(rec.parts)}" if len(rec.parts) > 1 else ""
+        print(f"      {rec.status} {rec.progress}%{where}   ", end="\r", flush=True)
     print(" " * 40, end="\r")
     return (f"ready: {rec.n_chunks} chunks, {rec.duration / 60:.0f} min"
             if rec.status == "ready" else f"FAILED: {rec.error}")

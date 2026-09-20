@@ -66,8 +66,8 @@
   ],
   "input": {
     "turn_detection": {
-      "min_silence": 700,
-      "max_silence": 2000,
+      "min_silence": 1400,
+      "max_silence": 3000,
       "interruption_delay": 300
     }
   }

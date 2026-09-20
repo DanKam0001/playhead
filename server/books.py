@@ -26,7 +26,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 import numpy as np
@@ -247,6 +247,14 @@ class BookRecord:
     duration: float = 0.0
     builtin: bool = False
     created: float = 0.0
+    # A real audiobook is published as one file per chapter, so a book is a
+    # list of parts laid end to end on a single timeline. Each carries the
+    # offset its chunks were shifted by, which is what lets a question at
+    # 4:12:30 find the right passage in the right file.
+    # [{url, transcript_id, offset_s, duration_s, done}]
+    parts: List[dict] = field(default_factory=list)
+    part_index: int = 0                # which part is being waited on
+    chunk_cursor: int = 0              # chunks written to shards so far
 
     @property
     def progress(self) -> int:
@@ -254,6 +262,8 @@ class BookRecord:
         if self.status == "ready":
             return 100
         if self.status == "transcribing":
+            if len(self.parts) > 1:
+                return 5 + int(35 * self.part_index / len(self.parts))
             return 10
         if self.status == "indexing" and self.n_chunks:
             return 40 + int(55 * self.embedded / self.n_chunks)
@@ -263,7 +273,14 @@ class BookRecord:
         return {"id": self.id, "title": self.title, "audio_url": self.audio_url,
                 "status": self.status, "error": self.error, "progress": self.progress,
                 "chunks": self.n_chunks, "duration": round(self.duration, 1),
-                "builtin": self.builtin}
+                "builtin": self.builtin,
+                # The player needs every part and where each begins, so it can
+                # treat the lot as one continuous recording.
+                "parts": [{"url": p["url"], "offset_s": round(p.get("offset_s", 0), 2),
+                           "duration_s": round(p.get("duration_s", 0), 2)}
+                          for p in self.parts],
+                "part_count": len(self.parts),
+                "parts_done": self.part_index}
 
 
 def _key(book_id: str, part: str = "meta") -> str:
@@ -288,13 +305,24 @@ def _shelf_key(client_id: str) -> str:
     return f"playhead:books:{client_id or 'anon'}"
 
 
-def create(store, title: str, audio_url: str, aai_key: str, client_id: str = "",
+def create(store, title: str, audio_urls, aai_key: str, client_id: str = "",
            book_id: str = "") -> BookRecord:
-    """Start a book. A given book_id makes it reproducible, which is what the
-    featured shelf needs -- otherwise every re-seed makes a new stranger."""
+    """Start a book from one or more audio files, in reading order.
+
+    A given book_id makes it reproducible, which is what the featured shelf
+    needs -- otherwise every re-seed makes a new stranger.
+
+    Nothing is transcribed here. The first advance() queues a batch and starts
+    absorbing them, so creating a sixty-chapter book returns as fast as
+    creating a one-chapter one.
+    """
+    urls = [audio_urls] if isinstance(audio_urls, str) else list(audio_urls)
+    if not urls:
+        raise ValueError("a book needs at least one audio file")
     rec = BookRecord(id=book_id or slug(title), title=title.strip() or "Untitled book",
-                     audio_url=audio_url, created=time.time())
-    rec.transcript_id = start_transcription(audio_url, aai_key)
+                     audio_url=urls[0], created=time.time(),
+                     parts=[{"url": u, "transcript_id": "", "offset_s": 0.0,
+                             "duration_s": 0.0, "done": False} for u in urls])
     save(store, rec)
     if client_id:
         store.kv_push(_shelf_key(client_id), rec.id)
@@ -348,8 +376,41 @@ def _fail(store, rec: BookRecord, message: str) -> BookRecord:
     return rec
 
 
+# How many transcription jobs to hand AssemblyAI per request. They run in
+# parallel on their side, so a 15-chapter book is not 15 times the wait -- but
+# submitting all of them in one request would blow the function's time budget.
+SUBMIT_BATCH = 8
+
+
 def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
-    t = _aai(f"/transcript/{rec.transcript_id}", aai_key)
+    """Walk the parts: submit what has not been sent, absorb what has finished.
+
+    One part per call, so the work stays inside a request no matter how long
+    the book is. Parts are absorbed in order -- they have to be, because each
+    one's chunks are shifted by the total duration of everything before it --
+    but they transcribe in parallel, so the wait is the slowest part, not the
+    sum of them.
+    """
+    # Get the rest of the book queued while we wait on the current part.
+    queued = 0
+    for part in rec.parts:
+        if part.get("transcript_id") or queued >= SUBMIT_BATCH:
+            continue
+        try:
+            part["transcript_id"] = start_transcription(part["url"], aai_key)
+            queued += 1
+        except urllib.error.HTTPError as exc:
+            return _fail(store, rec,
+                         f"AssemblyAI would not take part {rec.parts.index(part) + 1}: "
+                         f"{exc.read().decode()[:140]}")
+    if queued:
+        save(store, rec)
+
+    part = rec.parts[rec.part_index]
+    if not part.get("transcript_id"):
+        return rec                      # queued behind the batch; next call gets it
+
+    t = _aai(f"/transcript/{part['transcript_id']}", aai_key)
     status = t.get("status")
     if status == "error":
         err = t.get("error", "transcription failed")
@@ -360,61 +421,94 @@ def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
         if "download" in err.lower() or "unable to" in err.lower():
             err = ("the host would not hand over the file just then. "
                    "That is usually temporary - try it again.")
+        if len(rec.parts) > 1:
+            err = f"part {rec.part_index + 1} of {len(rec.parts)}: {err}"
         return _fail(store, rec, err)
     if status != "completed":
         return rec
 
-    paras = _aai(f"/transcript/{rec.transcript_id}/paragraphs", aai_key)
+    paras = _aai(f"/transcript/{part['transcript_id']}/paragraphs", aai_key)
     payload = {"paragraphs": paras.get("paragraphs", []),
                "text": t.get("text", ""),
                "audio_duration": t.get("audio_duration", 0)}
     chunks = _chunks_from(payload)
-    if not chunks:
-        return _fail(store, rec, "there is no speech in that recording - "
-                                 "Playhead needs someone reading out loud.")
 
-    # Music, ambience and silence all transcribe to almost nothing spread over a
-    # long duration. Indexing that produces a book the agent cannot answer from,
-    # which reads as the product being broken rather than the input being wrong.
-    minutes = max((payload.get("audio_duration") or 0) / 60.0, 0.5)
-    density = len(payload.get("text", "")) / minutes
-    if density < MIN_CHARS_PER_MINUTE:
-        return _fail(store, rec,
-                     f"that recording has very little speech in it "
-                     f"({density:.0f} characters a minute). Playhead indexes "
-                     f"narration - music or ambience gives it nothing to answer from.")
+    # Judge the recording on its first part only. A silent interlude in chapter
+    # seven should not throw away six chapters already paid for.
+    if rec.part_index == 0:
+        if not chunks:
+            return _fail(store, rec, "there is no speech in that recording - "
+                                     "Playhead needs someone reading out loud.")
+        minutes = max((payload.get("audio_duration") or 0) / 60.0, 0.5)
+        density = len(payload.get("text", "")) / minutes
+        if density < MIN_CHARS_PER_MINUTE:
+            return _fail(store, rec,
+                         f"that recording has very little speech in it "
+                         f"({density:.0f} characters a minute). Playhead indexes "
+                         f"narration - music or ambience gives it nothing to answer from.")
 
-    if MAX_CHUNKS:
-        chunks = chunks[:MAX_CHUNKS]
-    # Times are read on every single question, so they are kept apart from the
-    # text: a window lookup then costs one small fetch instead of pulling the
-    # whole book across the wire.
-    store.kv_set(_key(rec.id, "times"),
-                 json.dumps([[round(c.start_s, 2), round(c.end_s, 2)] for c in chunks]),
-                 ttl=BOOK_TTL)
-    for i in range(0, len(chunks), SLICE):
-        store.kv_set(_key(rec.id, f"text:{i // SLICE}"),
-                     json.dumps([c.text for c in chunks[i:i + SLICE]]), ttl=BOOK_TTL)
+    offset = float(part.get("offset_s") or 0.0)
+    part_duration = float(t.get("audio_duration")
+                          or (chunks[-1].end_s if chunks else 0.0))
+    _absorb_part(store, rec, chunks, offset, t.get("chapters") or [])
 
-    # Keep AssemblyAI's own chapter segmentation if it produced any. Its
-    # headlines are written from the content, so they work on recordings that
-    # never say "chapter one" out loud -- which is most of them.
-    aai_chapters = [
-        {"t": round((ch.get("start") or 0) / 1000.0, 1),
-         "title": (ch.get("headline") or ch.get("gist") or "").strip()[:70]}
-        for ch in (t.get("chapters") or [])
-        if (ch.get("headline") or ch.get("gist"))
-    ]
-    if aai_chapters:
-        store.kv_set(_key(rec.id, "chapters"), json.dumps(aai_chapters), ttl=BOOK_TTL)
-        print(f"[books] {rec.id}: {len(aai_chapters)} chapters from auto_chapters")
+    part["duration_s"] = part_duration
+    part["done"] = True
+    rec.part_index += 1
+    rec.duration = offset + part_duration
+    if rec.part_index < len(rec.parts):
+        rec.parts[rec.part_index]["offset_s"] = rec.duration
+        save(store, rec)
+        print(f"[books] {rec.id}: part {rec.part_index}/{len(rec.parts)} absorbed, "
+              f"{rec.chunk_cursor} chunks so far")
+        return rec
 
-    rec.n_chunks = len(chunks)
-    rec.duration = float(t.get("audio_duration") or (chunks[-1].end_s if chunks else 0))
+    # Every part is in. Flush whatever did not fill a final shard.
+    tail = json.loads(store.kv_get(_key(rec.id, "tail")) or "[]")
+    if tail:
+        store.kv_set(_key(rec.id, f"text:{rec.chunk_cursor // SLICE}"),
+                     json.dumps(tail), ttl=BOOK_TTL)
+    rec.n_chunks = rec.chunk_cursor + len(tail)
     rec.status, rec.embedded = "indexing", 0
     save(store, rec)
-    print(f"[books] {rec.id} transcribed: {rec.n_chunks} chunks")
+    print(f"[books] {rec.id} transcribed: {rec.n_chunks} chunks "
+          f"across {len(rec.parts)} part(s), {rec.duration / 60:.0f} min")
     return rec
+
+
+def _absorb_part(store, rec: BookRecord, chunks: List[Chunk],
+                 offset: float, aai_chapters: list) -> None:
+    """Fold one finished part into the growing index.
+
+    Text is written a shard at a time as it fills, so nothing has to hold a
+    whole book in memory or in one Redis value. Times are small enough to keep
+    as a single list and are read on every question, so they stay together.
+    """
+    if MAX_CHUNKS and rec.chunk_cursor >= MAX_CHUNKS:
+        return
+
+    times = json.loads(store.kv_get(_key(rec.id, "times")) or "[]")
+    times += [[round(c.start_s + offset, 2), round(c.end_s + offset, 2)] for c in chunks]
+    store.kv_set(_key(rec.id, "times"), json.dumps(times), ttl=BOOK_TTL)
+
+    tail = json.loads(store.kv_get(_key(rec.id, "tail")) or "[]")
+    tail += [c.text for c in chunks]
+    while len(tail) >= SLICE:
+        store.kv_set(_key(rec.id, f"text:{rec.chunk_cursor // SLICE}"),
+                     json.dumps(tail[:SLICE]), ttl=BOOK_TTL)
+        rec.chunk_cursor += SLICE
+        tail = tail[SLICE:]
+    store.kv_set(_key(rec.id, "tail"), json.dumps(tail), ttl=BOOK_TTL)
+
+    # AssemblyAI's own segmentation, shifted onto the book's timeline.
+    shifted = [
+        {"t": round((ch.get("start") or 0) / 1000.0 + offset, 1),
+         "title": (ch.get("headline") or ch.get("gist") or "").strip()[:70]}
+        for ch in aai_chapters if (ch.get("headline") or ch.get("gist"))
+    ]
+    if shifted:
+        have = json.loads(store.kv_get(_key(rec.id, "chapters")) or "[]")
+        store.kv_set(_key(rec.id, "chapters"), json.dumps(have + shifted), ttl=BOOK_TTL)
 
 
 def _chunks_from(payload: dict) -> List[Chunk]:

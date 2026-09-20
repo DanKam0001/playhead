@@ -48,7 +48,7 @@ const COMMANDS = [
     match: /^\W*(?:go back|back up|rewind|skip back)(?: a bit| a little)?[\s.!,]*$/i,
     run: () => {
       flushReply();
-      book.currentTime = Math.max(0, book.currentTime - 30);
+      seek(pos() - 30);
       resumeBook();
       turn("playhead", "Back 30 seconds", "system");
       debug("command: go back");
@@ -108,7 +108,7 @@ function turn(who, text, cls) {
   wrap.className = "turn " + (cls || who);
   const at = document.createElement("span");
   at.className = "at";
-  at.textContent = clockText(book.currentTime);
+  at.textContent = clockText(pos());
   const body = document.createElement("div");
   body.className = "body";
   const label = document.createElement("span");
@@ -153,6 +153,54 @@ function addUserSpeech(text) {
   noteQuestion(openTurn.p.textContent);
 }
 
+// ---------- one timeline across many files ----------
+//
+// A real audiobook is published one file per chapter, so a book here is a list
+// of parts laid end to end. Everything above this line works in *book* time --
+// 4:12:30 means four hours twelve into the book, not into whichever file is
+// loaded. Only these three functions know that more than one file exists.
+
+let parts = [];        // [{url, offset_s, duration_s}], empty for a single file
+let partIndex = 0;
+
+function partOffset() {
+  return parts.length ? (parts[partIndex] ? parts[partIndex].offset_s : 0) : 0;
+}
+
+// Where we are in the whole book.
+function pos() {
+  const t = book.currentTime;
+  return partOffset() + (isFinite(t) ? t : 0);
+}
+
+function loadPart(i, localTime, play) {
+  partIndex = Math.max(0, Math.min(parts.length - 1, i));
+  book.src = parts[partIndex].url;
+  book.load();
+  const go = () => {
+    book.removeEventListener("loadedmetadata", go);
+    book.currentTime = Math.max(0, localTime || 0);
+    if (play) book.play().catch(() => {});
+    paintSpine();
+  };
+  book.addEventListener("loadedmetadata", go);
+}
+
+// Move to a point in the book, changing file if that is where it lands.
+function seek(t) {
+  const total = duration();
+  t = Math.max(0, total ? Math.min(total - 0.25, t) : t);
+  if (parts.length < 2) {
+    book.currentTime = t;
+    return;
+  }
+  let i = 0;
+  while (i < parts.length - 1 && t >= parts[i].offset_s + parts[i].duration_s) i++;
+  const local = Math.max(0, t - parts[i].offset_s);
+  if (i === partIndex) book.currentTime = local;
+  else loadPart(i, local, !book.paused);
+}
+
 // ---------- the book ----------
 
 function duck() {
@@ -188,8 +236,9 @@ async function reportPlayhead() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         session_id: session.session_id,
-        seconds: book.currentTime,
+        seconds: pos(),
         book: currentBook ? currentBook.id : null,
+        brevity,
       }),
     });
     // The reply can carry a jump. go_to_topic runs on AssemblyAI's servers and
@@ -200,7 +249,7 @@ async function reportPlayhead() {
 }
 
 function applySeek(seconds) {
-  book.currentTime = seconds;
+  seek(seconds);
   // Suppress the usual rewind-on-resume: the listener asked to be here, and
   // backing up 3 s from a deliberate jump is just wrong.
   justSeeked = true;
@@ -221,7 +270,7 @@ const narrow = () => window.matchMedia("(max-width: 820px)").matches;
 
 function paintSpine() {
   const dur = duration();
-  const frac = dur ? Math.min(1, book.currentTime / dur) : 0;
+  const frac = dur ? Math.min(1, pos() / dur) : 0;
   const pct = (frac * 100).toFixed(2) + "%";
   const fill = el("spinefill").style;
   const cur = el("spinecursor").style;
@@ -232,15 +281,19 @@ function paintSpine() {
     fill.height = pct; fill.width = "100%";
     cur.top = pct; cur.left = "50%";
   }
-  el("clock").textContent = clockText(book.currentTime);
+  el("clock").textContent = clockText(pos());
   el("total").textContent = "/ " + clockText(dur);
   const spine = el("spine");
   spine.setAttribute("aria-valuemax", Math.round(dur));
-  spine.setAttribute("aria-valuenow", Math.round(book.currentTime));
-  spine.setAttribute("aria-valuetext", clockText(book.currentTime));
+  spine.setAttribute("aria-valuenow", Math.round(pos()));
+  spine.setAttribute("aria-valuetext", clockText(pos()));
 }
 
 function duration() {
+  // With parts, the element only knows the file it holds; the book's length
+  // comes from the server. Without parts the element is the better source,
+  // since it is exact and available before anything else loads.
+  if (parts.length > 1 && currentBook && currentBook.duration) return currentBook.duration;
   if (isFinite(book.duration) && book.duration > 0) return book.duration;
   return currentBook && currentBook.duration ? currentBook.duration : 0;
 }
@@ -274,7 +327,7 @@ function renderMarks() {
     label.textContent = n.q;
     b.append(label);
     b.addEventListener("click", () => {
-      book.currentTime = n.t;
+      seek(n.t);
       book.play().catch(() => {});
     });
     holder.appendChild(b);
@@ -313,7 +366,7 @@ function seekFromEvent(e) {
   const frac = narrow()
     ? (e.clientX - rect.left) / rect.width
     : (e.clientY - rect.top) / rect.height;
-  book.currentTime = Math.max(0, Math.min(dur, frac * dur));
+  seek(frac * dur);
   paintSpine();
 }
 
@@ -351,6 +404,7 @@ function buildSpeeds() {
 // default someone has to work around.
 
 let answerMode = "pause";
+let brevity = "full";
 
 function applyAnswerMode(mode) {
   answerMode = mode === "duck" ? "duck" : "pause";
@@ -358,6 +412,24 @@ function applyAnswerMode(mode) {
   el("answermode").querySelectorAll("button").forEach((b) => {
     b.setAttribute("aria-checked", String(b.dataset.mode === answerMode));
   });
+}
+
+function applyBrevity(mode) {
+  brevity = mode === "short" ? "short" : "full";
+  storageSet("playhead:brevity", brevity);
+  el("brevity").querySelectorAll("button").forEach((b) => {
+    b.setAttribute("aria-checked", String(b.dataset.brief === brevity));
+  });
+  // Takes effect on the next heartbeat, so a change mid-session lands within
+  // a second rather than waiting for a reconnect.
+  reportPlayhead();
+}
+
+function buildBrevity() {
+  el("brevity").querySelectorAll("button").forEach((b) => {
+    b.addEventListener("click", () => applyBrevity(b.dataset.brief));
+  });
+  applyBrevity(storageGet("playhead:brevity", "full"));
 }
 
 function buildAnswerMode() {
@@ -412,7 +484,7 @@ function renderContents() {
     if (c.hint) t.title = c.hint;
     b.append(at, t);
     b.addEventListener("click", () => {
-      book.currentTime = c.t;
+      seek(c.t);
       justSeeked = true;
       book.play().catch(() => {});
     });
@@ -424,7 +496,7 @@ function renderContents() {
 
 function markCurrentChapter() {
   if (!chapters.length) return;
-  const now = book.currentTime;
+  const now = pos();
   let active = -1;
   chapters.forEach((c, i) => { if (c.t <= now + 0.5) active = i; });
   el("toclist").querySelectorAll("button").forEach((b, i) => {
@@ -481,7 +553,7 @@ function noteQuestion(text) {
   // Capture the position now: by the time the answer arrives the book may have
   // moved, and the note is only useful if it points where the question was
   // asked. A stitched question keeps the position of its first fragment.
-  pendingQ = { t: pendingQ ? pendingQ.t : book.currentTime, q: text };
+  pendingQ = { t: pendingQ ? pendingQ.t : pos(), q: text };
 }
 
 function noteAnswer(text) {
@@ -583,7 +655,7 @@ function pushContext() {
 
 // Where they stopped, so the next visit can pick it up.
 function rememberPosition() {
-  if (book.currentTime > 5) storageSet(posKey(), Math.round(book.currentTime));
+  if (pos() > 5) storageSet(posKey(), Math.round(pos()));
 }
 
 function offerResume() {
@@ -593,7 +665,7 @@ function offerResume() {
   el("resumeat").textContent = clockText(at);
   bar.hidden = false;
   el("resumebtn").onclick = () => {
-    book.currentTime = at;
+    seek(at);
     bar.hidden = true;
   };
   el("resumedismiss").onclick = () => {
@@ -745,9 +817,13 @@ function selectBook(b, quiet) {
   storageSet("playhead:book", b.id);
   el("booktitle").textContent = b.title;
 
+  // A book of many files becomes one timeline; a single file is just itself.
+  parts = (b.parts && b.parts.length > 1) ? b.parts : [];
+  partIndex = 0;
   const src = b.audio_url || localAudio[b.id] || "";
-  needsFile = !src;
-  if (src) {
+  needsFile = !src && !parts.length;
+  if (parts.length) loadPart(0, 0, false);
+  else if (src) {
     book.src = src;
     book.load();
   }
@@ -1105,6 +1181,11 @@ async function start() {
         // The thought has been answered; the next thing said is a new one.
         openTurn = null;
         agentSpeaking = true;
+        // Hold the book for THIS answer. Resuming happens on reply.done, so
+        // when the agent answers twice in a row the book was playing
+        // underneath the second one -- which read as the pause setting being
+        // ignored. Every answer re-asserts it.
+        pauseBook();
         flushReply();
         setStatus("answering", "busy");
         break;
@@ -1126,7 +1207,7 @@ async function start() {
         // stopped, in which case rewinding would undo the continuity that was
         // the reason for choosing that mode.
         if (justSeeked) justSeeked = false;
-        else if (answerMode === "pause") book.currentTime = Math.max(0, book.currentTime - 3);
+        else if (answerMode === "pause") seek(pos() - 3);
         resumeBook();
         setPlayIcon(true);
         setStatus("listening - just talk", "live");
@@ -1154,6 +1235,13 @@ startBtn.addEventListener("click", start);
 el("play").addEventListener("click", () => {
   if (book.paused) book.play().catch(() => {}); else book.pause();
 });
+// The end of a file is only the end of the book if it was the last one.
+book.addEventListener("ended", () => {
+  if (parts.length && partIndex < parts.length - 1) {
+    debug(`part ${partIndex + 2} of ${parts.length}`);
+    loadPart(partIndex + 1, 0, true);
+  }
+});
 book.addEventListener("play", () => setPlayIcon(true));
 book.addEventListener("pause", () => setPlayIcon(false));
 book.addEventListener("loadedmetadata", () => { paintSpine(); renderMarks(); });
@@ -1162,8 +1250,8 @@ let lastRemembered = 0;
 book.addEventListener("timeupdate", () => {
   paintSpine();
   markCurrentChapter();
-  if (book.currentTime - lastRemembered > 5 || book.currentTime < lastRemembered) {
-    lastRemembered = book.currentTime;
+  if (pos() - lastRemembered > 5 || pos() < lastRemembered) {
+    lastRemembered = pos();
     rememberPosition();
   }
 });
@@ -1184,7 +1272,7 @@ el("spine").addEventListener("keydown", (e) => {
              : e.key === "ArrowDown" || e.key === "ArrowRight" ? 15 : 0;
   if (!step) return;
   e.preventDefault();
-  book.currentTime = Math.max(0, Math.min(duration(), book.currentTime + step));
+  seek(pos() + step);
   paintSpine();
 });
 
@@ -1248,6 +1336,7 @@ function clearConversation() {
 migrateOldKeys();
 buildSpeeds();
 buildAnswerMode();
+buildBrevity();
 notes = storageGet(notesKey(), []);
 renderNotes();
 paintSpine();

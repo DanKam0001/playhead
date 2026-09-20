@@ -51,7 +51,7 @@ def _setting(name: str, default: str = "") -> str:
             or default)
 
 
-BOOK = _setting("BOOK", "relativity")
+BOOK = _setting("BOOK", "calculus")
 # Read lazily-tolerant: a missing key should surface as a clear 500 on the
 # one endpoint that needs it, not as an import-time crash that takes the
 # whole function down and reports nothing useful.
@@ -71,6 +71,8 @@ MAX_UPLOAD_MB = float(_setting("MAX_UPLOAD_MB", "4"))
 MAX_SOURCE_MB = float(_setting("MAX_SOURCE_MB", "0"))
 # Books added per hour from one address; 0 disables the check entirely.
 RATE_PER_HOUR = int(_setting("RATE_PER_HOUR", "0"))
+# Files in one book. A LibriVox novel is 30-60 chapters.
+MAX_PARTS = int(_setting("MAX_PARTS", "80"))
 
 app = FastAPI(title="Playhead")
 library = Library(ROOT / "data" / f"{BOOK}.db")
@@ -99,6 +101,7 @@ class Playhead(BaseModel):
     session_id: str
     seconds: float
     book: Optional[str] = None
+    brevity: Optional[str] = None
 
 
 @app.post("/api/playhead")
@@ -114,6 +117,8 @@ def report_playhead(p: Playhead):
     # the browser knows, and the tool call from AssemblyAI cannot see it.
     if p.book:
         playheads.set_book(p.session_id, p.book)
+    if p.brevity:
+        playheads.set_brevity(p.session_id, p.brevity)
     # The same heartbeat carries jumps back. The agent cannot move the audio
     # itself -- it runs on AssemblyAI's servers -- so go_to_topic leaves a
     # pending position here and the browser collects it within the second.
@@ -210,6 +215,7 @@ def passage_at_playhead(call: ToolCall):
             parts += ["", f"Earlier in the book, on '{call.search}':",
                       " ".join(c.text for c in far)]
 
+    parts += ["", _length_rule(call.session_id)]
     return {"ok": True, "playhead_seconds": round(t, 1), "message": "\n".join(parts)}
 
 
@@ -287,7 +293,22 @@ def book_outline(call: OutlineCall):
         f"Describe what this book covers and how it is organised, in three or "
         f"four sentences, so they know what they are getting into. They asked, "
         f"so telling them the shape of it is not a spoiler -- but if it is a "
-        f"story, do not give away how it ends.")}
+        f"story, do not give away how it ends.\n\n{_length_rule(call.session_id)}")}
+
+
+def _length_rule(session_id: Optional[str]) -> str:
+    """How long the answer should be, as a line the agent will read.
+
+    The stored agent's prompt is fixed for everyone, so the preference travels
+    on the tool response instead -- the one channel that is already per-session
+    and that the model definitely reads.
+    """
+    if (playheads.get_brevity(session_id) or "full") == "short":
+        return ("ANSWER IN ONE SENTENCE. They have asked for short answers. Say the "
+                "single most useful thing and stop. Do not add context, caveats, "
+                "or a summary of what you just said.")
+    return ("Answer in two or three sentences. Do not restate the question, and "
+            "do not close by summarising what you just said.")
 
 
 def _spread(lib, k: int = 10) -> list:
@@ -336,7 +357,10 @@ def _search_earlier(lib, query: str, before_s: float, exclude) -> list:
 
 class NewBook(BaseModel):
     title: str = ""
-    audio_url: str
+    audio_url: str = ""
+    # A real audiobook is one file per chapter. Give them in reading order and
+    # they become one continuous book.
+    audio_urls: list[str] = []
 
 
 def _embedder():
@@ -365,7 +389,7 @@ def _builtin_card() -> dict:
 # scripts/seed_featured.py, which uses these exact ids so a re-run updates the
 # same books rather than creating strangers.
 FEATURED_IDS = [
-    "featured-russell-problems-1",
+    "featured-russell-problems-full",
     "featured-bennett-24hours-1",
     "featured-wittgenstein-tractatus-1",
 ]
@@ -452,14 +476,21 @@ def add_book(new: NewBook, request: Request):
     """
     if not AAI_KEY:
         raise HTTPException(500, "ASSEMBLYAI_API_KEY is not set on this deployment.")
-    url = new.audio_url.strip()
+    urls = [u.strip() for u in (new.audio_urls or [new.audio_url]) if u and u.strip()]
+    if not urls:
+        raise HTTPException(400, "No audio link given.")
+    if len(urls) > MAX_PARTS:
+        raise HTTPException(400, f"That's {len(urls)} files; {MAX_PARTS} is the most "
+                                 f"this deployment will take as one book.")
     try:
         # Checked before anything is fetched or queued: this runs from our own
         # server, so an unvalidated link is a request forgery, and an unbounded
-        # one is someone else's transcription bill.
-        books.check_source(url, int(MAX_SOURCE_MB * 1_000_000))
+        # one is someone else's transcription bill. Every part is checked --
+        # one bad link in chapter nine should fail now, not in ten minutes.
+        for u in urls:
+            books.check_source(u, int(MAX_SOURCE_MB * 1_000_000))
         _rate_limit(request)
-        rec = books.create(playheads, new.title or _title_from_url(url), url,
+        rec = books.create(playheads, new.title or _title_from_url(urls[0]), urls,
                            AAI_KEY, _client_id(request))
     except books.RejectedURL as e:
         raise HTTPException(400, str(e))
