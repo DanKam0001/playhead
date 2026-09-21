@@ -382,6 +382,42 @@ the table.
 | Vector search, 8000 chunks (44 h) | 85 ms; index loads in 144 ms, 12 MB resident |
 | One shard (100 chunks x 768d fp16) | 200 KB base64 — under Upstash's 1 MB cap |
 
+### The 54-hour book, verified live (2026-09-21)
+
+`featured-dumas-monte-cristo`: **The Count of Monte Cristo, 117 files, 54.30
+hours, 4737 chunks.** The largest thing this has been pointed at, and the
+answer to "does position-first retrieval hold at scale".
+
+| | |
+|---|---|
+| Window lookup at 0h15m / 12h / 27h / 40h / 53h | 247 / 125 / 196 / 126 / **102 ms** |
+| Each landed in the right file | 1, 29, 53, 81, 114 of 117 |
+| First topic search (cold: loads 4737 x 768 fp16, ~7 MB) | **1766 ms** |
+| Every topic search after it | **1-126 ms** |
+| Spoiler cap, asked 1h into a 54h novel | refused 20h44m, returned material behind the playhead |
+
+Topic search put five queries in the right place in the narrative, in order:
+Chateau d'If 5h49m (file 15) -> Faria teaching him 6h57m (17) -> the treasure
+9h42m (24) -> the escape into the sea 13h08m (31) -> arriving in Paris 20h44m
+(42).
+
+**Note the cold-start cost.** The first named-topic question on a very long
+book pays ~1.8 s to pull the vector index. Deictic questions never pay it,
+because a window lookup reads the times plus one text shard. If that ever
+needs fixing, warm the index -- do not make the questions slower.
+
+### Indexing throughput, measured over twelve real books
+
+Wall clock tracks **file count** more than total hours, because transcription
+runs in parallel (`SUBMIT_BATCH = 8`) and absorption is one part per call:
+
+| Book | Files | Hours | Indexed in |
+|---|---|---|---|
+| Calculus Made Easy | 58 | 10.13 | 10 min |
+| Locke, Human Understanding | 32 | 14.66 | 9 min |
+| Tractatus | 6 | 4.24 | 3 min |
+| As a Man Thinketh | 8 | 0.90 | 9 min (two network failures) |
+
 **The retrieval layer is not the limit and will not become one.** AssemblyAI
 transcription time is the only thing that scales with book length in a way
 anyone notices.
