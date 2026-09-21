@@ -607,6 +607,54 @@ missing or still indexing is skipped, so that list can name books that are not
 finished yet. `SUGGESTED` deliberately names two short chapters that are **not**
 on the shelf and **not** indexed -- they exist to be added on camera.
 
+## What this costs, and where it is spent (2026-09-21)
+
+`python scripts/spend.py --what-if`. It reconstructs spend from AssemblyAI's
+own job history rather than our records, because ours were already wrong -- a
+book can be billed for 21 hours and index none of them.
+
+**There is no balance endpoint and no usage endpoint.** `/v2/account` returns
+`{}`. The dashboard is the only place the real number lives, which is why this
+went unnoticed until the account went negative mid-seed.
+
+Prices (read from the pricing page 2026-09-21; there is no pricing API, so
+re-check before quoting them):
+
+| | |
+|---|---|
+| Universal-3.5 Pro async | $0.21 / audio hour |
+| Universal-2 async | $0.15 / audio hour |
+| `auto_chapters` | **+$0.08 / audio hour** |
+| **Voice Agent** | **$0.075 / minute of session** |
+
+**Transcription is the expensive half and `auto_chapters` is the worst of it.**
+Measured over 139.6 hours: as configured, ~$40; without `auto_chapters`, ~$29;
+on Universal-2 without it, ~$21. It is deprecated, English-only -- it billed
+$0.77 against Spanish audio and returned no chapters at all -- and
+`books.contents()` already derives a table of contents from the narrator's own
+announcements. **Turning it off is close to free money.**
+
+**The Voice Agent is billed on session duration, including silence**, because
+it is a websocket held open. A tab left open for an hour costs $4.50 whether
+or not anyone speaks. That makes the Stop listening button a cost control as
+much as a privacy one, and it is the argument for an idle auto-disconnect
+before the URL is public.
+
+Retrieval itself -- the window lookup, the vector search, the spoiler cap --
+costs AssemblyAI nothing. It is Redis plus Gemini embeddings.
+
+### Work that is not checkpointed gets paid for twice
+
+Three instances of one bug shape in a single day, and worth recognising early
+next time:
+
+- the indexer discarded finished parts when a book failed;
+- the seeder resubmitted transcripts that were already bought and waiting;
+- `spend.py` fetched 300 job details and wrote its cache only at the end, so
+  every interruption started from zero.
+
+All three are fixed the same way: save as you go, atomically, and resume.
+
 ## Open and untested (as of 2026-09-20)
 
 - **Multi-part playback is now driven in a browser by `tests/test_ui.py`** --

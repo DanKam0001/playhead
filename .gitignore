@@ -23,3 +23,4 @@ LAUNCH.md
 
 # Throwaway pages used for headless screenshots.
 web/_*.html
+data/.spend_cache.json
