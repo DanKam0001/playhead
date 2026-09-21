@@ -22,9 +22,11 @@ const statusEl = el("status");
 const transcriptEl = el("transcript");
 const startBtn = el("start");
 
-let ws, session, micCtx, micNode, outCtx, playCursor = 0;
+let ws, session, micCtx, micNode, micStream, outCtx, playCursor = 0;
 let ducked = false, agentSpeaking = false, framesSent = 0, justSeeked = false;
 let scheduled = [];   // agent audio already queued on the device
+let heartbeat = null; // the once-a-second playhead report
+let live = false;     // a session is up and the microphone is open
 
 // ---------- spoken commands ----------
 //
@@ -34,9 +36,22 @@ let scheduled = [];   // agent audio already queued on the device
 // match only a whole short utterance, so a real question containing the word
 // "continue" is never swallowed.
 
+// People do not say "okay." They say "okay, carry on" -- an acknowledgement
+// and an instruction, in one breath. The old pattern matched exactly one of
+// these words and then demanded the end of the utterance, so the single most
+// natural way to ask for the book back was the one phrasing it ignored.
+// Now any run of them counts, which also covers "alright thanks", "got it,
+// keep going" and "yeah okay carry on".
+const RESUME_WORD =
+  "(?:ok(?:ay)?|alright|all right|right|yeah|yep|yes|thanks?|thank you|" +
+  "got it|gotcha|understood|i see|makes sense|cool|nice|carry on|keep going|" +
+  "go on|continue|resume|play|unpause|back to (?:the )?book|never ?mind|" +
+  "that'?s (?:it|all))";
+
 const COMMANDS = [
   {
-    match: /^\W*(?:ok(?:ay)?|alright|right|thanks?|thank you|got it|carry on|keep going|go on|continue|resume|play|unpause|back to (?:the )?book|never ?mind|that'?s (?:it|all))[\s.!,]*$/i,
+    match: new RegExp(
+      `^\\W*${RESUME_WORD}(?:[\\s,.!]+${RESUME_WORD})*[\\s.!,]*$`, "i"),
     run: () => {
       flushReply();
       resumeBook();
@@ -56,10 +71,28 @@ const COMMANDS = [
   },
 ];
 
+// The agent hears "okay, carry on" too, and answers it -- "Sure, let me know
+// if you have more questions" -- which fires reply.started, which re-pauses
+// the book we have just resumed. So the book came back for a second and then
+// stopped again, which reads as the command not working.
+//
+// A command is handled here and the reply it provokes is dropped: not played,
+// not shown, and above all not allowed to pause anything. Cleared when that
+// reply finishes, with a timer in case the agent chooses not to answer at all.
+let suppressReply = false;
+let suppressTimer = null;
+
+function suppressNextReply() {
+  suppressReply = true;
+  if (suppressTimer) clearTimeout(suppressTimer);
+  suppressTimer = setTimeout(() => { suppressReply = false; }, 6000);
+}
+
 // Returns true when the utterance was a command and has been handled here.
 function handleCommand(text) {
   const hit = COMMANDS.find((c) => c.match.test(text || ""));
   if (!hit) return false;
+  suppressNextReply();
   hit.run();
   return true;
 }
@@ -81,11 +114,16 @@ function debug(msg) {
   log.textContent = debugLines.join(String.fromCharCode(10));
 }
 
+// Books here run to fifty-four hours, so minutes:seconds is not enough -- it
+// printed 3256:21 for a position three hours in, which is both unreadable and
+// wrong-looking. Hours appear only when there are some, so a short chapter
+// still reads 09:12 rather than 0:09:12.
 function clockText(t) {
   if (!isFinite(t) || t < 0) t = 0;
-  const m = String(Math.floor(t / 60)).padStart(2, "0");
+  const h = Math.floor(t / 3600);
+  const m = String(Math.floor((t % 3600) / 60)).padStart(2, "0");
   const s = String(Math.floor(t % 60)).padStart(2, "0");
-  return `${m}:${s}`;
+  return h ? `${h}:${m}:${s}` : `${m}:${s}`;
 }
 
 // ---------- the conversation ----------
@@ -148,6 +186,12 @@ function addUserSpeech(text) {
   } else {
     const p = turn("you", text);
     openTurn = { p, node: p.closest(".turn") };
+    // A new thought starts a new note. noteQuestion() deliberately keeps the
+    // first fragment's timestamp while a thought is still being assembled --
+    // but a question that never got answered (an agent error, a dropped
+    // socket) left its timestamp behind, and the next question inherited it.
+    // The mark then pinned to where the previous question was asked.
+    pendingQ = null;
   }
   // The note tracks the whole thought, not the first stub of it.
   noteQuestion(openTurn.p.textContent);
@@ -163,6 +207,16 @@ function addUserSpeech(text) {
 let parts = [];        // [{url, offset_s, duration_s}], empty for a single file
 let partIndex = 0;
 
+// The part list is only a timeline when every part has been measured. An
+// unfinished book reports all of its parts with zeroed offsets, which is not a
+// shorter timeline -- it is a wrong one.
+function usableParts(b) {
+  if (!b || b.status !== "ready") return [];
+  const ps = b.parts || [];
+  if (ps.length < 2) return [];
+  return ps.every((p) => p.duration_s > 0) ? ps : [];
+}
+
 function partOffset() {
   return parts.length ? (parts[partIndex] ? parts[partIndex].offset_s : 0) : 0;
 }
@@ -175,6 +229,9 @@ function pos() {
 
 function loadPart(i, localTime, play) {
   partIndex = Math.max(0, Math.min(parts.length - 1, i));
+  // This call carries its own destination; a seek queued against the file we
+  // are leaving must not be replayed into the one we are loading.
+  pendingSeek = null;
   book.src = parts[partIndex].url;
   book.load();
   const go = () => {
@@ -186,18 +243,36 @@ function loadPart(i, localTime, play) {
   book.addEventListener("loadedmetadata", go);
 }
 
+// Setting currentTime before the element has metadata is silently ignored --
+// no error, no seek, and the caller has no way to tell. That is how clicking
+// "Pick up there" the instant a book opened did nothing at all. Hold the
+// request and apply it when the file is ready.
+let pendingSeek = null;
+
+function setLocalTime(local) {
+  if (book.readyState < 1) { pendingSeek = local; return; }
+  book.currentTime = local;
+}
+
+function drainPendingSeek() {
+  if (pendingSeek === null) return;
+  const t = pendingSeek;
+  pendingSeek = null;
+  book.currentTime = t;
+}
+
 // Move to a point in the book, changing file if that is where it lands.
 function seek(t) {
   const total = duration();
   t = Math.max(0, total ? Math.min(total - 0.25, t) : t);
   if (parts.length < 2) {
-    book.currentTime = t;
+    setLocalTime(t);
     return;
   }
   let i = 0;
   while (i < parts.length - 1 && t >= parts[i].offset_s + parts[i].duration_s) i++;
   const local = Math.max(0, t - parts[i].offset_s);
-  if (i === partIndex) book.currentTime = local;
+  if (i === partIndex) setLocalTime(local);
   else loadPart(i, local, !book.paused);
 }
 
@@ -220,10 +295,17 @@ function pauseBook() {
 }
 
 function resumeBook() {
+  unduck();
+  if (book.paused) book.play().catch(() => {});
+}
+
+// Undo the ducking without deciding whether the book should be playing. Ending
+// a session should give the volume back, not start playback someone paused on
+// purpose a minute ago.
+function unduck() {
   ducked = false;
   book.volume = 1;
   document.body.classList.remove("listening");
-  if (book.paused) book.play().catch(() => {});
 }
 
 // The tool runs on AssemblyAI's servers and has no idea where playback is, or
@@ -328,6 +410,9 @@ function renderMarks() {
     b.append(label);
     b.addEventListener("click", () => {
       seek(n.t);
+      // Deliberate, like a chapter jump: if this happens while an answer is
+      // running, do not undo it with the usual three-second rewind.
+      justSeeked = true;
       book.play().catch(() => {});
     });
     holder.appendChild(b);
@@ -367,6 +452,7 @@ function seekFromEvent(e) {
     ? (e.clientX - rect.left) / rect.width
     : (e.clientY - rect.top) / rect.height;
   seek(frac * dur);
+  justSeeked = true;      // dragging the spine is as deliberate as it gets
   paintSpine();
 }
 
@@ -375,18 +461,35 @@ function seekFromEvent(e) {
 // Anyone who listens to books seriously listens fast, and the rate has to
 // survive changing book and reloading or it is a toy.
 
+let rate = 1;
+
 function applyRate(r) {
-  r = Math.min(3, Math.max(1, Number(r) || 1));
-  book.playbackRate = r;
+  rate = Math.min(3, Math.max(1, Number(r) || 1));
+  // BOTH, and this is the whole bug: load() runs the media load algorithm,
+  // which resets playbackRate to defaultPlaybackRate. Setting only
+  // playbackRate meant every book change and every part handover silently
+  // dropped back to 1x while the slider still read 3x -- the control and the
+  // audio disagreeing, which is worse than either being wrong.
+  book.defaultPlaybackRate = rate;
+  book.playbackRate = rate;
   // Keep voices sounding like voices rather than chipmunks at 2x. Three
   // spellings because the unprefixed one is recent.
   book.preservesPitch = true;
   book.mozPreservesPitch = true;
   book.webkitPreservesPitch = true;
-  storageSet("playhead:rate", r);
-  el("speed").value = String(r);
-  el("speedval").textContent = r.toFixed(2) + "×";
-  el("speedreset").hidden = r === 1;
+  storageSet("playhead:rate", rate);
+  el("speed").value = String(rate);
+  el("speedval").textContent = rate.toFixed(2) + "×";
+  el("speedreset").hidden = rate === 1;
+}
+
+// Re-assert after any load, because defaultPlaybackRate is only a default:
+// a browser that ignores it still gets the rate put back here.
+function reassertRate() {
+  if (book.playbackRate !== rate) book.playbackRate = rate;
+  book.preservesPitch = true;
+  book.mozPreservesPitch = true;
+  book.webkitPreservesPitch = true;
 }
 
 function buildSpeeds() {
@@ -516,8 +619,12 @@ function markCurrentChapter() {
 let notes = [];
 let pendingQ = null;
 
-const notesKey = () => "playhead:notes:" + (currentBook ? currentBook.id : "relativity");
-const posKey = () => "playhead:pos:" + (currentBook ? currentBook.id : "relativity");
+// "relativity" was the shipped book two renames ago. Keying anything to it now
+// files notes under a book that does not exist, so the fallback is explicit:
+// nothing is selected yet, and nothing should be written.
+const NO_BOOK = "unselected";
+const notesKey = () => "playhead:notes:" + (currentBook ? currentBook.id : NO_BOOK);
+const posKey = () => "playhead:pos:" + (currentBook ? currentBook.id : NO_BOOK);
 
 // The product was called EchoRead until 2026-09-19. Anyone who used it before
 // then has notes under the old prefix, and a rename that silently eats them is
@@ -581,7 +688,7 @@ function renderNotes() {
 
 function exportNotes() {
   const lines = ["# Playhead notes", "",
-                 "Book: " + (currentBook ? currentBook.title : "relativity"),
+                 "Book: " + (currentBook ? currentBook.title : "none"),
                  "Exported: " + new Date().toLocaleString(), ""];
   notes.forEach((n) => {
     lines.push("## " + clockText(n.t), "", "**You asked:** " + n.q, "", n.a, "");
@@ -654,7 +761,17 @@ function pushContext() {
 }
 
 // Where they stopped, so the next visit can pick it up.
+//
+// Suppressed while a book is being swapped in. posKey() follows currentBook,
+// which changes the instant the new book is chosen -- but the <audio> element
+// still holds the old file for a few more ticks, and the pause and timeupdate
+// events it fires during the swap were writing the OLD book's position under
+// the NEW book's key. The symptom is opening a book you have never played and
+// being offered to resume at somebody else's timestamp.
+let switching = false;
+
 function rememberPosition() {
+  if (switching || !currentBook) return;
   if (pos() > 5) storageSet(posKey(), Math.round(pos()));
 }
 
@@ -720,8 +837,12 @@ async function loadShelf() {
   renderSuggested();
   renderLimits();
   if (!currentBook) {
+    // Never open on a book that cannot be played. Landing on one that is
+    // still indexing gives a dead transport and an empty spine, which reads
+    // as the whole page being broken rather than as one book not being ready.
     const saved = storageGet("playhead:book", null);
-    const pick = shelf.find((b) => b.id === saved) || shelf[0];
+    const ready = shelf.filter((b) => b.status === "ready");
+    const pick = ready.find((b) => b.id === saved) || ready[0];
     if (pick) selectBook(pick, true);
   }
   // Anything still indexing keeps getting nudged until it is done.
@@ -813,13 +934,29 @@ function renderShelf() {
 }
 
 function selectBook(b, quiet) {
+  // Bank the old book's position while posKey() still points at it.
+  if (currentBook && currentBook.id !== b.id) rememberPosition();
+  switching = true;
+  // A backstop: a source that never reports metadata (a dead link, a revoked
+  // object URL) would otherwise leave saving switched off for the session.
+  setTimeout(() => { switching = false; }, 4000);
+  lastRemembered = 0;
   currentBook = b;
   storageSet("playhead:book", b.id);
   el("booktitle").textContent = b.title;
 
   // A book of many files becomes one timeline; a single file is just itself.
-  parts = (b.parts && b.parts.length > 1) ? b.parts : [];
+  //
+  // Only trust the part list once the book is ready. While it is still being
+  // absorbed the record carries every part but only the finished ones have a
+  // real offset -- the rest are 0.0 -- and seek() walks those offsets looking
+  // for the file a timestamp lands in. With a run of zeroes every seek past
+  // the first second resolves to the last part, so a half-indexed book plays
+  // chapter 117 wherever you touch the spine. Treated as a single file until
+  // the offsets mean something.
+  parts = usableParts(b);
   partIndex = 0;
+  pendingSeek = null;     // belongs to the book we are leaving
   const src = b.audio_url || localAudio[b.id] || "";
   needsFile = !src && !parts.length;
   if (parts.length) loadPart(0, 0, false);
@@ -879,17 +1016,62 @@ function renderSuggested() {
   el("suggestedwrap").hidden = list.children.length === 0;
 }
 
+// Each poll advances the job one step server-side, so two pollers on the same
+// book do not go twice as fast -- they just double the requests and fight over
+// the same record. loadShelf nudges everything unfinished on every load, which
+// is exactly how a second one gets started.
+const polling = new Set();
+
 async function pollBook(id) {
-  for (let i = 0; i < 240; i++) {
-    await new Promise((r) => setTimeout(r, 2500));
+  if (polling.has(id)) return;
+  polling.add(id);
+  try {
+    return await pollLoop(id);
+  } finally {
+    polling.delete(id);
+  }
+}
+
+async function pollLoop(id) {
+  // Ten minutes was the old ceiling and it was written when a book was one
+  // chapter. A fifteen-part book takes about that long and a hundred-part one
+  // takes hours, so the budget follows the book; the poll also slows down
+  // once it is clear this is a long one, rather than asking every 2.5 s for
+  // an afternoon.
+  const started = Date.now();
+  let budgetMs = 15 * 60 * 1000;
+  for (;;) {
+    const mins = (Date.now() - started) / 60000;
+    const gap = mins < 2 ? 2500 : mins < 10 ? 6000 : 15000;
+    await new Promise((r) => setTimeout(r, gap));
+    if (Date.now() - started > budgetMs) {
+      const b = shelf.find((x) => x.id === id);
+      addStatus("Still working on “" + (b ? b.title : id) + "”. It is safe to leave "
+                + "this page — reopen it and indexing carries on from where it "
+                + "got to.");
+      return;
+    }
     let rec;
     try {
       rec = await (await fetch("/api/books/" + encodeURIComponent(id),
                                { headers: withClient() })).json();
     } catch (_) { continue; }
+    // Now that the record is in hand, size the budget to the actual book:
+    // two minutes a part, which comfortably covers a 117-file novel.
+    if (rec && rec.part_count) {
+      budgetMs = Math.max(budgetMs, rec.part_count * 120 * 1000);
+    }
     const at = shelf.findIndex((b) => b.id === rec.id);
     if (at >= 0) shelf[at] = rec; else shelf.push(rec);
-    if (currentBook && currentBook.id === rec.id) currentBook = rec;
+    // Re-select rather than just swapping the record in. The player's parts,
+    // duration and contents were all derived from the old one, and a book
+    // that finished indexing while it was open otherwise stayed unplayable
+    // until a reload -- with a full progress bar, which looks like a lie.
+    if (currentBook && currentBook.id === rec.id) {
+      const wasReady = currentBook.status === "ready";
+      currentBook = rec;
+      if (!wasReady && rec.status === "ready") selectBook(rec, true);
+    }
     renderShelf();
     if (rec.status === "ready") {
       addStatus("“" + rec.title + "” is ready — " + rec.chunks + " passages indexed.");
@@ -900,9 +1082,14 @@ async function pollBook(id) {
       addStatus("Indexing failed: " + rec.error, true);
       return rec;
     }
+    // A multi-file book says which file it is on: "transcribing" sitting at
+    // 5% for half an hour on a 117-part novel looks stuck when it is working.
+    const many = rec.part_count > 1
+      ? ` — file ${Math.min(rec.parts_done + 1, rec.part_count)} of ${rec.part_count}`
+      : "";
     addStatus(rec.status === "transcribing"
-      ? "Transcribing — this takes a minute or two for a chapter."
-      : `Indexing passages … ${rec.progress}%`);
+      ? `Transcribing${many} — a minute or two per file.`
+      : `Indexing passages … ${rec.progress}%${many}`);
   }
 }
 
@@ -1005,6 +1192,9 @@ async function startMic() {
       channelCount: 1,
     },
   });
+  // Held so the tracks can be stopped later. Without the handle the only way
+  // to release the microphone is to close the tab.
+  micStream = stream;
   // Already opened by unlockAudio() inside the tap; reuse it rather than
   // building a second one, which iOS would hand back suspended.
   if (!micCtx) micCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
@@ -1081,7 +1271,48 @@ function unlockAudio() {
   }
 }
 
+// Give the microphone back and stop the session.
+//
+// There was no way to do this short of closing the tab, which is the wrong
+// answer to "stop listening to me" -- and it also made a bad session
+// unrecoverable without losing the page. Stopping the tracks is what turns the
+// browser's recording indicator off; closing the socket alone does not.
+function stopSession() {
+  live = false;
+  if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+  try { if (micNode) micNode.disconnect(); } catch (_) { /* already gone */ }
+  micNode = null;
+  if (micStream) {
+    micStream.getTracks().forEach((t) => { try { t.stop(); } catch (_) { /* ok */ } });
+    micStream = null;
+  }
+  if (ws) {
+    // Drop the handlers first: onclose would otherwise re-enter the UI reset
+    // while this one is half-done.
+    ws.onclose = null;
+    ws.onerror = null;
+    try { ws.close(); } catch (_) { /* already closing */ }
+    ws = null;
+  }
+  flushReply();
+  session = null;
+  agentSpeaking = false;
+  openTurn = null;
+  unduck();
+  setListenIcon(false);
+  startBtn.disabled = false;
+  setStatus("not listening — the book plays on", "idle");
+  debug("session stopped, microphone released");
+}
+
+function setListenIcon(on) {
+  live = on;
+  startBtn.textContent = on ? "Stop listening" : "Enable asking questions";
+  startBtn.classList.toggle("live", on);
+}
+
 async function start() {
+  if (live) { stopSession(); return; }
   if (needsFile) {
     addStatus("This book has no audio loaded — choose the file below first.", true);
     return;
@@ -1119,6 +1350,19 @@ async function start() {
   ws.onclose = () => {
     // Keep an error on screen rather than replacing it with "disconnected".
     if (statusEl.dataset.state !== "error") setStatus("disconnected", "idle");
+    // The socket going away has to tear down the rest too, or the microphone
+    // stays open and the heartbeat keeps reporting for a session that no
+    // longer exists.
+    if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    if (micStream) {
+      micStream.getTracks().forEach((t) => { try { t.stop(); } catch (_) { /* ok */ } });
+      micStream = null;
+    }
+    try { if (micNode) micNode.disconnect(); } catch (_) { /* already gone */ }
+    micNode = null;
+    session = null;
+    setListenIcon(false);
+    unduck();
     startBtn.disabled = false;
   };
 
@@ -1139,13 +1383,30 @@ async function start() {
           return;
         }
         await reportPlayhead();
-        setInterval(reportPlayhead, 1000);
+        // Replace, never stack. Pressing start again after a dropped socket
+        // used to leave the old timer running, so every reconnect added
+        // another report per second -- four sessions in and the backend was
+        // being told the playhead four times a second by four dead sessions.
+        if (heartbeat) clearInterval(heartbeat);
+        heartbeat = setInterval(reportPlayhead, 1000);
+        live = true;
+        setListenIcon(true);
+        // Re-enable it: the button was disabled to stop a second connection
+        // being opened while this one was still handshaking, and it now means
+        // "stop listening". Left disabled it read as a dead control, and the
+        // only way to release the microphone was to close the tab.
+        startBtn.disabled = false;
         book.play().catch(() => {});
         setPlayIcon(true);
         setStatus("listening - just talk", "live");
         break;
 
       case "input.speech.started":
+        // A new question starts here, so anything that moved the playhead
+        // before it is history. Without this a chapter click half an hour ago
+        // still suppressed the three-second rewind on the next answer, and
+        // the flag could sit true for the rest of the session.
+        justSeeked = false;
         // Duck immediately; commit to a full pause once words arrive.
         duck();
         setStatus("you're talking", "live");
@@ -1180,6 +1441,9 @@ async function start() {
       case "reply.started":
         // The thought has been answered; the next thing said is a new one.
         openTurn = null;
+        // A reply to "carry on" is not an answer to anything. Let it run its
+        // course on the server, but do not stop the book for it.
+        if (suppressReply) { flushReply(); break; }
         agentSpeaking = true;
         // Hold the book for THIS answer. Resuming happens on reply.done, so
         // when the agent answers twice in a row the book was playing
@@ -1191,15 +1455,23 @@ async function start() {
         break;
 
       case "reply.audio":
+        if (suppressReply) break;
         playReply(m.data || m.audio);
         break;
 
       case "transcript.agent":
+        if (suppressReply) break;
         turn("playhead", m.text || "");
         noteAnswer(m.text || "");
         break;
 
       case "reply.done":
+        if (suppressReply) {
+          suppressReply = false;
+          if (suppressTimer) { clearTimeout(suppressTimer); suppressTimer = null; }
+          flushReply();
+          break;      // the book was never stopped; leave it alone
+        }
         agentSpeaking = false;
         if (m.status === "interrupted") flushReply();
         // Back up slightly so the run-up to the question is re-heard -- unless
@@ -1244,7 +1516,16 @@ book.addEventListener("ended", () => {
 });
 book.addEventListener("play", () => setPlayIcon(true));
 book.addEventListener("pause", () => setPlayIcon(false));
-book.addEventListener("loadedmetadata", () => { paintSpine(); renderMarks(); });
+book.addEventListener("loadedmetadata", () => {
+  switching = false;          // the element now holds the book we think it does
+  reassertRate();
+  drainPendingSeek();
+  paintSpine();
+  renderMarks();
+});
+// loadeddata fires for sources that never report metadata the same way; both
+// are cheap and the rate has to survive every path into a new file.
+book.addEventListener("loadeddata", reassertRate);
 
 let lastRemembered = 0;
 book.addEventListener("timeupdate", () => {
@@ -1266,7 +1547,11 @@ el("spine").addEventListener("pointerdown", (e) => {
   seekFromEvent(e);
 });
 el("spine").addEventListener("pointermove", (e) => { if (dragging) seekFromEvent(e); });
-el("spine").addEventListener("pointerup", () => { dragging = false; });
+// pointercancel as well as pointerup: the browser takes the pointer away on a
+// scroll gesture or an incoming call, and without this the spine stayed in
+// drag mode, so the next stray move over it threw the listener across the book.
+["pointerup", "pointercancel", "lostpointercapture"].forEach((t) =>
+  el("spine").addEventListener(t, () => { dragging = false; }));
 el("spine").addEventListener("keydown", (e) => {
   const step = e.key === "ArrowUp" || e.key === "ArrowLeft" ? -15
              : e.key === "ArrowDown" || e.key === "ArrowRight" ? 15 : 0;

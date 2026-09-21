@@ -388,22 +388,43 @@ def _builtin_card() -> dict:
 # Already transcribed and indexed, and shown to everyone. Seeded once by
 # scripts/seed_featured.py, which uses these exact ids so a re-run updates the
 # same books rather than creating strangers.
+# Seeded by scripts/seed_featured.py, which is where the source URLs live.
+# This list is only the ids and their order on the shelf: longest first,
+# because the length is the point -- a 54-hour book you can ask anything of at
+# any second is the claim, and it should be the first row, not a footnote.
+# An id that is missing or still indexing is skipped, so this can name books
+# that are not finished yet.
 FEATURED_IDS = [
-    "featured-russell-problems-full",
-    "featured-bennett-24hours-1",
-    "featured-wittgenstein-tractatus-1",
+    "featured-dumas-monte-cristo",             # 117 files, 54.3 h
+    "featured-dostoevsky-crime-punishment",    #  40 files, 23.4 h
+    "featured-locke-understanding",            #  32 files, 14.7 h
+    "featured-thoreau-walden",                 #  23 files, 14.3 h
+    "featured-hume-treatise",                  #  40 files, 14.0 h
+    "featured-shelley-frankenstein-es",        #  28 files, 11.6 h (Spanish)
+    "featured-thompson-calculus",              #  58 files, 10.1 h
+    "featured-wilde-dorian-gray",              #  13 files,  6.2 h
+    "featured-russell-problems-full",          #  15 files,  4.8 h
+    "featured-wittgenstein-tractatus",         #   6 files,  4.2 h
+    "featured-bennett-24hours",                #  13 files,  1.6 h
+    "featured-allen-as-a-man-thinketh",        #   8 files,  0.9 h
 ]
 
 # NOT indexed. One tap adds them, which takes a minute and is the clearest
 # demonstration of what this does -- a book that did not exist when you sat
 # down, answering questions about itself.
 SUGGESTED: list[dict] = [
-    {"title": "Thompson - Calculus Made Easy, ch. 4",
-     "audio_url": "https://archive.org/download/calculus_made_easy_1608_librivox/calculusmadeeasy_04_thompson_64kb.mp3",
-     "note": "Carries straight on from the chapter you are listening to"},
-    {"title": "Allen - As a Man Thinketh, ch. 1",
-     "audio_url": "https://archive.org/download/as_a_man_thinketh_mc_librivox/asamanthinketh_1_allen_64kb.mp3",
-     "note": "Five minutes - indexes while you watch"},
+    # Deliberately NOT on the featured shelf and deliberately NOT indexed:
+    # these exist to be added live. One tap transcribes and indexes a book that
+    # did not exist a minute earlier, which is the only way to answer "isn't
+    # this just RAG over a corpus you prepared?" without an argument.
+    # Both are short on purpose -- a chapter indexes in well under a minute,
+    # which is a shot you can film, and both are verified to serve.
+    {"title": "Sun Tzu - The Art of War, ch. 1-2",
+     "audio_url": "https://archive.org/download/art_of_war_librivox/art_of_war_01-02_sun_tzu_64kb.mp3",
+     "note": "Eight minutes - indexes while you watch"},
+    {"title": "Marcus Aurelius - Meditations, book 2",
+     "audio_url": "https://archive.org/download/themeditationsofmarcusaurelius_1801_librivox/meditationsofmarcusaurelius_02_aurelius_64kb.mp3",
+     "note": "Thirteen minutes - add it and ask it something"},
 ]
 
 
@@ -444,8 +465,9 @@ def _featured() -> list[dict]:
     """Ready-made books, shown to everyone. Missing ones are skipped silently:
     a shelf that is one book short beats a page that will not load."""
     out = []
-    for book_id in FEATURED_IDS:
-        rec = books.load(playheads, book_id)
+    found = books.load_many(playheads, FEATURED_IDS)
+    for book_id in FEATURED_IDS:          # FEATURED_IDS fixes the shelf order
+        rec = found.get(book_id)
         if rec and rec.status == "ready":
             card = rec.public()
             card["featured"] = True      # not removable; it is not their book

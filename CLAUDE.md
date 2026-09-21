@@ -196,9 +196,10 @@ but changed nothing, producing a `NameError` that only surfaced mid-demo.
 `playhead/{player,mic,ears,session,brain,voice,config}.py`, `run_demo.py`,
 `mic_check.py`, `ask.py`, `bench_latency.py`, `make_demo_audiobook.py`.
 
-`check_keys.py` verifies all vendors. `tests/test_desktop_client.py` covers the desktop client
-and must pass with no key or hardware; **the web app has no automated tests** —
-verify it with `/api/health` and the page's event log.
+`check_keys.py` verifies all vendors. `tests/test_desktop_client.py` covers the
+desktop client and must pass with no key or hardware. The web app has tests on
+both sides now: `tests/test_books.py`/`test_store.py`/`test_parts.py` for the
+backend, and `tests/test_ui.py` for the browser client.
 
 ## Measured numbers (real — use these in the writeup, don't invent others)
 
@@ -461,9 +462,11 @@ mutate the stored agent.
 
 ## Tests
 
-`pytest` — 51 tests, no keys, no network, no audio hardware. That is a hard
+`pytest` — 113 tests, no keys, no network, no audio hardware. That is a hard
 rule: CI has none of those. `tests/fake_upstash.py` is a stand-in for the REST
-API, which is the only way to cover command encoding and 200 KB shards.
+API, which is the only way to cover command encoding and 200 KB shards, and
+`tests/ui_harness.py` does the same job for the browser (see the client-tests
+section below). The UI tests need a Playwright browser and skip without one.
 
 Three bugs the suite caught that live testing had not:
 
@@ -474,16 +477,110 @@ Three bugs the suite caught that live testing had not:
 - `Part 1` vanished from the fallback contents: a zero-width window at t=0
   misses a first chunk that starts half a second in.
 
+## The browser client has tests now (built 2026-09-21)
+
+`tests/test_ui.py` + `tests/ui_harness.py`: a real Chromium via Playwright, a
+stub backend serving `web/` and short real WAV files, and a fake websocket the
+test speaks through as the agent. **Every test in it failed against the client
+as it stood before that date**, which is the argument for it existing: all of
+these were state bugs, where the internals were self-consistent and the product
+was wrong.
+
+    pytest tests/test_ui.py -q
+
+Skips cleanly when Playwright or its browser is missing, so CI is unaffected.
+Real audio matters -- the element has to report a real `duration`, because the
+spine, the marks and every seek are computed from it.
+
+### Four traps it caught that reading the code did not
+
+1. **`load()` resets `playbackRate` to `defaultPlaybackRate`.** Nothing set
+   `defaultPlaybackRate`, so every book change and every part handover silently
+   dropped to 1x while the slider still read 3.00x. Set both, and re-assert on
+   `loadedmetadata`. This is the single easiest mistake to make in this file.
+2. **An unfinished book reports every part with `duration_s: 0`.** That is not
+   a shorter timeline, it is a wrong one: `seek()` walks the offsets, so a run
+   of zeroes sends every seek past the first second to the last part. Parts are
+   only a timeline once all of them are measured -- `usableParts()`.
+3. **`currentTime` set before metadata is silently ignored.** No error, no
+   seek, no way for the caller to tell. Seeks now queue and drain on load.
+4. **`posKey()` follows `currentBook`, which changes before the audio does.**
+   The `pause` and `timeupdate` events fired during a swap wrote the OLD
+   book's position under the NEW book's key. Guarded with a `switching` flag.
+
+### And one in the voice commands
+
+The resume pattern matched exactly one token then demanded end-of-utterance,
+so `"okay, carry on"` -- the most natural phrasing there is -- never matched.
+Worse, when a command *did* match, the agent answered it too, and that reply
+fired `reply.started`, which re-paused the book the listener had just asked to
+resume. A command's reply is now suppressed outright.
+
+## Indexing gives up far less easily (2026-09-21)
+
+Three separate ways a nearly-finished book used to be thrown away, all found by
+seeding twelve real books:
+
+- **A transient network error failed the whole book.** A read timeout at part 7
+  of 8 discarded seven finished parts. Timeouts, connection resets, 429 and 5xx
+  now `_defer()` -- the record is left alone and the next poll retries, with
+  `MAX_TRANSIENT` consecutive failures before giving up for real.
+- **A stalled transcription blocked a book forever.** Parts absorb strictly in
+  order, so one job stuck in `processing` froze a 13-part book at 5% with no
+  error and nothing to retry, while every other part had finished. Parts now
+  carry `submitted_at`, and `_nudge_if_stalled()` resubmits after
+  `STALL_SECONDS`.
+- **An AssemblyAI download error was fatal.** archive.org 503'd the last file
+  of a 13-part book and the code said "that is usually temporary" while failing
+  permanently. Temporary-looking errors now resubmit, bounded by
+  `MAX_RESUBMITS`.
+
+**`language_detection` is on.** Without it the request defaults to English, and
+a Spanish recording comes back as fluent-looking nonsense that indexes cleanly
+and answers confidently -- the worst of the available failures. Verified
+against a real Spanish LibriVox file (returns `es`). Both it and
+`auto_chapters` are dropped and retried if the API rejects either.
+
+**`BOOK_TTL` is a setting now** (`PLAYHEAD_BOOK_TTL_DAYS`). Thirty days is right
+for a book a stranger added; it is wrong for the featured shelf, which has to
+outlive a judging window that opens after submissions close.
+`scripts/seed_featured.py` sets 180.
+
+## The featured shelf is twelve whole books (2026-09-21)
+
+160 hours, 395 files, all public domain LibriVox, seeded by
+`scripts/seed_featured.py`. The script names **archive.org identifiers**, not
+URLs, and fetches the file list from the metadata API at run time -- 117 files
+is 117 chances to hand-type chapter 40 before chapter 4, and part order is the
+one mistake nothing downstream can detect. It also refuses a book whose fetched
+duration disagrees with the expected one.
+
+    python scripts/seed_featured.py --list
+    python scripts/seed_featured.py --only walden,hume
+    python scripts/seed_featured.py --force
+
+`--only` takes a comma-separated list because the fast way to seed this is
+several processes over disjoint slices. It resumes rather than restarts: a book
+left `transcribing` is picked up where it got to. **Restart a worker that has
+stopped making progress** -- observed live, a wedged HTTP connection had one
+process sitting at part 2 of 58 for half an hour, and restarting absorbed
+nineteen parts in the first minute.
+
+Ids are fixed and must match `FEATURED_IDS` in `server/main.py`; a book that is
+missing or still indexing is skipped, so that list can name books that are not
+finished yet. `SUGGESTED` deliberately names two short chapters that are **not**
+on the shelf and **not** indexed -- they exist to be added on camera.
+
 ## Open and untested (as of 2026-09-20)
 
-- **Multi-part playback has not been watched in a browser.** The offset
-  arithmetic is covered by `tests/test_parts.py` and verified server-side
-  against a real 3-part book, but nobody has sat through a part *boundary* in
-  the page. Watch for: the clock jumping at a handover, the spine resetting,
-  or playback stopping instead of advancing. `loadPart()` is where to look.
-- Featured books carry a 30-day TTL, so the shelf empties a month after
-  seeding. Re-run `scripts/seed_featured.py` (safe: finished books are skipped
-  unless `--force`).
+- **Multi-part playback is now driven in a browser by `tests/test_ui.py`** --
+  a seek across a part boundary lands in the right file, the clock reports
+  book time rather than file time, and the rate survives the handover. What is
+  still unwatched is a handover reached by *playing into it* rather than
+  seeking: the `ended` -> `loadPart(next)` path. Watch one on the Russell.
+- ~~Featured books carry a 30-day TTL~~ -- fixed: the seeder writes 180 days
+  (`PLAYHEAD_BOOK_TTL_DAYS`). Re-run `scripts/seed_featured.py` to top them up
+  (safe: finished books are skipped unless `--force`).
 
 ## Open and untested (as of 2026-09-19, still true)
 

@@ -19,9 +19,11 @@ the job one step further. That also gives the page a real progress number
 instead of a spinner that means nothing.
 """
 import base64
+import http.client
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -44,7 +46,12 @@ DIM = 768
 # about the last few bits of mantissa, and it halves what crosses the wire.
 VEC_DTYPE = "float16"
 
-BOOK_TTL = 30 * 24 * 3600
+# How long an indexed book survives in the store. Thirty days is right for a
+# book a stranger added and will never open again. It is wrong for the featured
+# shelf, which has to outlive a judging window that starts after submissions
+# close -- so scripts/seed_featured.py raises this before importing, and the
+# books it writes keep whatever it set.
+BOOK_TTL = int(os.getenv("PLAYHEAD_BOOK_TTL_DAYS", "30") or 30) * 24 * 3600
 # An upper bound on a single book, in chunks (~1800 is a ten-hour book).
 # 0 means no ceiling. Left as a setting rather than deleted because it is the
 # only thing standing between one enormous file and the whole store.
@@ -217,19 +224,30 @@ def start_transcription(audio_url: str, key: str) -> str:
     # its structure out loud. Marked deprecated in favour of the LLM Gateway,
     # which this account is gated out of, so it is used while it exists and
     # `contents()` still works without it.
+    # language_detection, because "any audiobook" has to mean any language.
+    # Without it the request defaults to English and a Spanish recording comes
+    # back as fluent-looking nonsense -- which indexes cleanly, answers
+    # confidently, and is wrong, the worst of the three available failures.
     body = {"audio_url": audio_url, "punctuate": True, "format_text": True,
-            "auto_chapters": True}
-    try:
-        return _aai("/transcript", key, body)["id"]
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode()[:300]
-        if "auto_chapters" not in detail:
-            raise
-        # Too short for chapters, or the feature is gone. Neither is a reason
-        # to refuse the book.
-        print(f"[books] auto_chapters rejected, retrying without: {detail[:120]}")
-        body.pop("auto_chapters")
-        return _aai("/transcript", key, body)["id"]
+            "language_detection": True, "auto_chapters": True}
+    # Both extras are optional. auto_chapters is English-only and rejects short
+    # files; language detection can be unavailable on a model. Drop whichever
+    # the API names and try again rather than refusing the book over a feature
+    # that was never the point.
+    for _ in range(2):
+        try:
+            return _aai("/transcript", key, body)["id"]
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode()[:300]
+            dropped = [k for k in ("auto_chapters", "language_detection")
+                       if k in detail and k in body]
+            if not dropped:
+                raise
+            print(f"[books] {'/'.join(dropped)} rejected, retrying without: "
+                  f"{detail[:120]}")
+            for k in dropped:
+                body.pop(k)
+    return _aai("/transcript", key, body)["id"]
 
 
 # ---------- the record ----------
@@ -255,6 +273,9 @@ class BookRecord:
     parts: List[dict] = field(default_factory=list)
     part_index: int = 0                # which part is being waited on
     chunk_cursor: int = 0              # chunks written to shards so far
+    # Consecutive network wobbles. Reset the moment anything succeeds, so a
+    # blip at part 3 and another at part 40 never add up to a failure.
+    transient: int = 0
 
     @property
     def progress(self) -> int:
@@ -295,6 +316,28 @@ def load(store, book_id: str) -> Optional[BookRecord]:
         return BookRecord(**json.loads(raw))
     except Exception:
         return None
+
+
+def load_many(store, book_ids) -> dict:
+    """Several books in one round trip, for callers that know all the ids.
+
+    The featured shelf is a dozen books and is read on every page load. Loaded
+    one at a time that is a dozen sequential calls to Upstash inside a function
+    with a ten-second budget, which is how a shelf becomes the slow part of a
+    demo. Missing or unreadable records are simply absent from the result.
+    """
+    ids = list(book_ids)
+    if not ids:
+        return {}
+    out = {}
+    for book_id, raw in zip(ids, store.kv_mget([_key(i) for i in ids])):
+        if not raw:
+            continue
+        try:
+            out[book_id] = BookRecord(**json.loads(raw))
+        except Exception:
+            continue
+    return out
 
 
 def save(store, rec: BookRecord) -> None:
@@ -359,13 +402,48 @@ def advance(store, rec: BookRecord, aai_key: str, embedder) -> BookRecord:
         return rec
     try:
         if rec.status == "transcribing":
-            return _poll_transcript(store, rec, aai_key)
-        if rec.status == "indexing":
-            return _embed_slice(store, rec, embedder)
+            out = _poll_transcript(store, rec, aai_key)
+        elif rec.status == "indexing":
+            out = _embed_slice(store, rec, embedder)
+        else:
+            return rec
+        # A clean pass wipes the slate: a wobble at part 3 and another at part
+        # 40 are two blips, not a book on its way to failing.
+        if out.status != "failed" and out.transient:
+            out.transient = 0
+            save(store, out)
+        return out
     except urllib.error.HTTPError as e:
+        # 429 and 5xx are AssemblyAI having a moment, not this book being bad.
+        if e.code == 429 or e.code >= 500:
+            return _defer(store, rec, f"{e.code} from AssemblyAI")
         return _fail(store, rec, f"{e.code}: {e.read().decode()[:160]}")
+    except _TRANSIENT as exc:
+        return _defer(store, rec, f"{type(exc).__name__}: {exc}")
     except Exception as exc:
         return _fail(store, rec, str(exc)[:200])
+    return rec
+
+
+# Errors that mean "the network wobbled", not "this book cannot be indexed".
+# A read timeout eleven parts into a fifteen-part book used to mark the whole
+# thing failed and throw away everything already paid for -- which is both the
+# most expensive moment to give up and the one most likely to be a blip.
+_TRANSIENT = (TimeoutError, ConnectionError, socket.timeout,
+              urllib.error.URLError, http.client.HTTPException)
+# Consecutive wobbles before we accept it is not a wobble. Each one costs a
+# poll interval, so this is minutes of patience, not hours.
+MAX_TRANSIENT = 10
+
+
+def _defer(store, rec: BookRecord, message: str) -> BookRecord:
+    """Leave the book alone and let the next poll try again."""
+    rec.transient = getattr(rec, "transient", 0) + 1
+    if rec.transient > MAX_TRANSIENT:
+        return _fail(store, rec, f"gave up after {rec.transient} network errors "
+                                 f"in a row; the last was {message}")
+    print(f"[books] {rec.id}: {message} (attempt {rec.transient}, will retry)")
+    save(store, rec)
     return rec
 
 
@@ -380,6 +458,47 @@ def _fail(store, rec: BookRecord, message: str) -> BookRecord:
 # parallel on their side, so a 15-chapter book is not 15 times the wait -- but
 # submitting all of them in one request would blow the function's time budget.
 SUBMIT_BATCH = 8
+
+
+# A transcription job that has sat unfinished for this long is not slow, it is
+# stuck. Observed live: part one of a thirteen-part book stayed "processing"
+# for twenty minutes while parts two and four finished in seconds.
+STALL_SECONDS = 15 * 60
+# Resubmits allowed per part. Each one costs another transcription of that
+# file, so this is deliberately small.
+MAX_RESUBMITS = 2
+
+
+def _nudge_if_stalled(store, rec: BookRecord, part: dict, aai_key: str) -> BookRecord:
+    """Re-submit a part that has stopped making progress.
+
+    Parts are absorbed strictly in order, because each one's timestamps are
+    shifted by the total duration of everything before it. That makes a single
+    stuck job fatal in a quiet way: the book sits at the same percentage
+    forever, with no error to show and nothing to retry, while every other
+    part finished long ago.
+    """
+    since = part.get("submitted_at") or 0
+    if not since:
+        # A part submitted before this field existed, or by an older build.
+        # Start its clock now rather than never nudging it: an unknown
+        # submission time must not mean "wait forever".
+        part["submitted_at"] = time.time()
+        save(store, rec)
+        return rec
+    if time.time() - since < STALL_SECONDS:
+        return rec
+    if part.get("resubmits", 0) >= MAX_RESUBMITS:
+        return _fail(store, rec,
+                     f"part {rec.part_index + 1} of {len(rec.parts)} never finished "
+                     f"transcribing, after {MAX_RESUBMITS} attempts")
+    part["resubmits"] = part.get("resubmits", 0) + 1
+    print(f"[books] {rec.id}: part {rec.part_index + 1} stalled, resubmitting "
+          f"(attempt {part['resubmits'] + 1})")
+    part["transcript_id"] = start_transcription(part["url"], aai_key)
+    part["submitted_at"] = time.time()
+    save(store, rec)
+    return rec
 
 
 def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
@@ -398,6 +517,7 @@ def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
             continue
         try:
             part["transcript_id"] = start_transcription(part["url"], aai_key)
+            part["submitted_at"] = time.time()
             queued += 1
         except urllib.error.HTTPError as exc:
             return _fail(store, rec,
@@ -415,17 +535,29 @@ def _poll_transcript(store, rec: BookRecord, aai_key: str) -> BookRecord:
     if status == "error":
         err = t.get("error", "transcription failed")
         # archive.org in particular will 503 a file it served happily a minute
-        # earlier. That is worth saying out loud, because "failed" invites
-        # someone to go hunting for a different link when the same one works
-        # on a second try.
-        if "download" in err.lower() or "unable to" in err.lower():
-            err = ("the host would not hand over the file just then. "
-                   "That is usually temporary - try it again.")
+        # earlier. We used to say "that is usually temporary" and then fail
+        # permanently, which is both inconsistent and expensive: it threw away
+        # twelve finished parts of a thirteen-part book because the last file
+        # was briefly unavailable. Retry it ourselves instead, and only give up
+        # when the same file has refused several times.
+        temporary = ("download" in err.lower() or "unable to" in err.lower()
+                     or "timeout" in err.lower() or "503" in err)
+        if temporary and part.get("resubmits", 0) < MAX_RESUBMITS:
+            part["resubmits"] = part.get("resubmits", 0) + 1
+            print(f"[books] {rec.id}: part {rec.part_index + 1} could not be "
+                  f"downloaded, retrying (attempt {part['resubmits'] + 1})")
+            part["transcript_id"] = start_transcription(part["url"], aai_key)
+            part["submitted_at"] = time.time()
+            save(store, rec)
+            return rec
+        if temporary:
+            err = ("the host would not hand over the file, across several "
+                   "attempts. That is usually temporary - try it again.")
         if len(rec.parts) > 1:
             err = f"part {rec.part_index + 1} of {len(rec.parts)}: {err}"
         return _fail(store, rec, err)
     if status != "completed":
-        return rec
+        return _nudge_if_stalled(store, rec, part, aai_key)
 
     paras = _aai(f"/transcript/{part['transcript_id']}/paragraphs", aai_key)
     payload = {"paragraphs": paras.get("paragraphs", []),
