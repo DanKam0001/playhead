@@ -155,10 +155,27 @@ def seed(store, book_id: str, spec: dict, aai_key: str, force: bool) -> str:
         return (f"already ready ({existing.n_chunks} chunks, "
                 f"{existing.duration / 3600:.1f} h)")
 
+    # A book that failed partway is worth repairing rather than rebuilding.
+    # It failed on ONE part; every part before it is transcribed and absorbed,
+    # and re-running from scratch pays for all of them again. Clear the bad
+    # part's job so it is resubmitted, put the record back in progress, and
+    # carry on from where it stopped.
+    if (existing and existing.status == "failed" and not force
+            and existing.part_index > 0):
+        rec = existing
+        bad = rec.parts[rec.part_index] if rec.part_index < len(rec.parts) else None
+        if bad:
+            bad["transcript_id"] = ""
+            bad["submitted_at"] = 0
+            bad["resubmits"] = 0
+        rec.status, rec.error, rec.transient = "transcribing", "", 0
+        books.save(store, rec)
+        print(f"      repairing: failed at part {rec.part_index + 1}/{len(rec.parts)}, "
+              f"keeping the {rec.part_index} already done")
     # Resume rather than restart. These runs are hours long; losing a
     # half-transcribed 117-part book to a dropped connection and paying for it
     # twice is the failure this guards against.
-    if existing and existing.status in ("transcribing", "indexing") and not force:
+    elif existing and existing.status in ("transcribing", "indexing") and not force:
         rec = existing
         done = sum(1 for p in rec.parts if p.get("done"))
         print(f"      resuming at part {done}/{len(rec.parts)}")
