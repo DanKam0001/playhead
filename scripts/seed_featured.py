@@ -163,15 +163,36 @@ def seed(store, book_id: str, spec: dict, aai_key: str, force: bool) -> str:
     if (existing and existing.status == "failed" and not force
             and existing.part_index > 0):
         rec = existing
-        bad = rec.parts[rec.part_index] if rec.part_index < len(rec.parts) else None
-        if bad:
-            bad["transcript_id"] = ""
-            bad["submitted_at"] = 0
-            bad["resubmits"] = 0
+        # Clear only the jobs that actually failed.
+        #
+        # SUBMIT_BATCH queues eight parts ahead of absorption, so when a book
+        # dies at part 14 the parts after it have often already transcribed --
+        # and been paid for. Those transcripts are still sitting on
+        # AssemblyAI's side and are free to collect. Blindly resubmitting the
+        # tail would buy all of them a second time; leaving a *failed* job in
+        # place would fail the book again the moment it reached that part.
+        # So: ask, and only reset what is genuinely broken.
+        cleared = kept = 0
+        for part in rec.parts[rec.part_index:]:
+            tid = part.get("transcript_id")
+            if not tid:
+                continue
+            try:
+                state = books._aai(f"/transcript/{tid}", aai_key).get("status")
+            except Exception:
+                state = "error"
+            if state == "error":
+                part["transcript_id"] = ""
+                part["submitted_at"] = 0
+                part["resubmits"] = 0
+                cleared += 1
+            else:
+                kept += 1
         rec.status, rec.error, rec.transient = "transcribing", "", 0
         books.save(store, rec)
-        print(f"      repairing: failed at part {rec.part_index + 1}/{len(rec.parts)}, "
-              f"keeping the {rec.part_index} already done")
+        print(f"      repairing: failed at part {rec.part_index + 1}/{len(rec.parts)}; "
+              f"keeping {rec.part_index} absorbed + {kept} already-paid transcripts, "
+              f"resubmitting {cleared}")
     # Resume rather than restart. These runs are hours long; losing a
     # half-transcribed 117-part book to a dropped connection and paying for it
     # twice is the failure this guards against.
