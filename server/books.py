@@ -218,18 +218,29 @@ def start_transcription(audio_url: str, key: str) -> str:
     # universal-2). Pinning it here would silently break when the flagship
     # model is renamed, which has already happened once on this project.
     #
-    # auto_chapters gives semantically segmented chapters with timestamps,
-    # which is a far better table of contents than anything we can derive --
-    # and it is the only way to get one for a recording that never announces
-    # its structure out loud. Marked deprecated in favour of the LLM Gateway,
-    # which this account is gated out of, so it is used while it exists and
-    # `contents()` still works without it.
-    # language_detection, because "any audiobook" has to mean any language.
-    # Without it the request defaults to English and a Spanish recording comes
-    # back as fluent-looking nonsense -- which indexes cleanly, answers
-    # confidently, and is wrong, the worst of the three available failures.
+    # auto_chapters is OFF, and that is a cost decision made with numbers.
+    #
+    # It bills +$0.08 per audio hour on top of a $0.15-0.21 base -- roughly a
+    # third of the whole bill. Measured over the 139.6 hours this project has
+    # transcribed: $40.49 with it, $29.32 without. It is also deprecated, and
+    # English-only: it was billed against 9.6 hours of Spanish audio and
+    # returned no chapters at all.
+    #
+    # What it bought was nicer chapter titles. `contents()` derives a table of
+    # contents from the narrator's own announcements instead, which is what
+    # every LibriVox recording opens each file with anyway. Set
+    # PLAYHEAD_AUTO_CHAPTERS=1 to turn it back on for a single book if a
+    # recording genuinely has no spoken structure.
+    #
+    # language_detection stays ON, because "any audiobook" has to mean any
+    # language. Without it the request defaults to English and a Spanish
+    # recording comes back as fluent-looking nonsense -- which indexes
+    # cleanly, answers confidently, and is wrong: the worst of the three
+    # available failures. It is not a paid add-on.
     body = {"audio_url": audio_url, "punctuate": True, "format_text": True,
-            "language_detection": True, "auto_chapters": True}
+            "language_detection": True}
+    if os.getenv("PLAYHEAD_AUTO_CHAPTERS", "") in ("1", "true", "yes"):
+        body["auto_chapters"] = True
     # Both extras are optional. auto_chapters is English-only and rejects short
     # files; language detection can be unavailable on a model. Drop whichever
     # the API names and try again rather than refusing the book over a feature

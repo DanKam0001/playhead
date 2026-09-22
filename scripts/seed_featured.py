@@ -160,8 +160,14 @@ def seed(store, book_id: str, spec: dict, aai_key: str, force: bool) -> str:
     # and re-running from scratch pays for all of them again. Clear the bad
     # part's job so it is resubmitted, put the record back in progress, and
     # carry on from where it stopped.
+    # `part_index > 0` was the wrong test and it cost real money: Dorian Gray
+    # had absorbed nothing but had NINE transcripts already bought and
+    # waiting, so it failed this check and was rebuilt from scratch, paying
+    # for all nine a second time. What makes a book repairable is having any
+    # work to salvage at all -- absorbed parts or submitted jobs.
     if (existing and existing.status == "failed" and not force
-            and existing.part_index > 0):
+            and (existing.part_index > 0
+                 or any(p.get("transcript_id") for p in existing.parts))):
         rec = existing
         # Clear only the jobs that actually failed.
         #
