@@ -413,13 +413,21 @@ def test_these_are_questions_not_commands(page, said):
 # --------------------------------------------------------------------------
 
 def test_play_button_reflects_actual_state(page):
-    """The icon comes from the element's own events, not from what we clicked."""
+    """The icon comes from the element's own events, not from what we clicked.
+
+    Waiting on `paused` is the wrong signal and made this flaky: `paused`
+    flips synchronously inside play(), while the `play` event that repaints
+    the icon fires a tick later. Wait for the label, which is the thing under
+    test.
+    """
     page.click("#play")
-    page.wait_for_function("document.getElementById('book').paused === false")
-    assert "Pause" in page.get_attribute("#play", "aria-label")
+    page.wait_for_function(
+        "document.getElementById('play').getAttribute('aria-label').includes('Pause')")
+    assert page.evaluate("document.getElementById('book').paused") is False
     page.click("#play")
-    page.wait_for_function("document.getElementById('book').paused === true")
-    assert "Play" in page.get_attribute("#play", "aria-label")
+    page.wait_for_function(
+        "document.getElementById('play').getAttribute('aria-label').includes('Play')")
+    assert page.evaluate("document.getElementById('book').paused") is True
 
 
 def test_the_spine_scrubs_to_where_you_click(page):
@@ -446,7 +454,11 @@ def test_chapters_jump_and_mark_where_you_are(page):
     page.wait_for_selector("#toclist button")
     page.locator("#toclist button").nth(1).click()
     page.wait_for_function("partIndex === 1")
-    assert abs(page.evaluate("pos()") - (PART_SECONDS[0] + 1)) < 1.0
+    # partIndex flips as soon as the file is chosen; the seek inside it lands
+    # only once that file reports metadata. Wait for the position, not the
+    # part -- otherwise pos() is still the part's bare offset.
+    page.wait_for_function(
+        "t => Math.abs(pos() - t) < 0.6", arg=PART_SECONDS[0] + 1, timeout=15000)
     page.wait_for_function(
         "document.querySelectorAll('#toclist button')[1].getAttribute('aria-current') === 'true'")
 
@@ -457,3 +469,35 @@ def test_marks_on_the_spine_play_from_where_the_question_was_asked(page):
     page.wait_for_selector("#spinemarks .mark")
     page.click("#spinemarks .mark")
     page.wait_for_function("Math.abs(pos() - 14) < 1.5")
+
+
+# --------------------------------------------------------------------------
+# the idle hang-up
+# --------------------------------------------------------------------------
+
+def test_an_idle_session_releases_itself(page):
+    """A session bills per minute while it is open, talking or not."""
+    start_session(page)
+    assert page.evaluate("live") is True
+    # Fire the timer now rather than waiting five real minutes.
+    page.evaluate("clearTimeout(idleTimer); idleTimer = setTimeout(() => {"
+                  " if (live) { stopSession();"
+                  " setStatus('still listening to the book - tap to ask again','idle'); } }, 50)")
+    page.wait_for_function("live === false")
+    assert page.evaluate("micStream === null")
+    assert page.evaluate("window.__intervals.length") == 0
+
+
+def test_speech_keeps_an_idle_session_alive(page):
+    start_session(page)
+    page.evaluate("window.__idleBefore = idleTimer")
+    page.evaluate("window.__agent({type:'input.speech.started'})")
+    assert page.evaluate("idleTimer !== window.__idleBefore"),         "a question should reset the idle clock"
+
+
+def test_the_idle_timer_does_not_outlive_the_session(page):
+    """A timer that fires after a manual stop would stomp on the next session."""
+    start_session(page)
+    page.click("#start")
+    page.wait_for_function("live === false")
+    assert page.evaluate("idleTimer === null")

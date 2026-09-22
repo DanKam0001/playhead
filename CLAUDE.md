@@ -498,7 +498,7 @@ mutate the stored agent.
 
 ## Tests
 
-`pytest` — 113 tests, no keys, no network, no audio hardware. That is a hard
+`pytest` — 116 tests, no keys, no network, no audio hardware. That is a hard
 rule: CI has none of those. `tests/fake_upstash.py` is a stand-in for the REST
 API, which is the only way to cover command encoding and 200 KB shards, and
 `tests/ui_harness.py` does the same job for the browser (see the client-tests
@@ -582,9 +582,10 @@ for a book a stranger added; it is wrong for the featured shelf, which has to
 outlive a judging window that opens after submissions close.
 `scripts/seed_featured.py` sets 180.
 
-## The featured shelf is twelve whole books (2026-09-21)
+## The featured shelf is eleven whole books (2026-09-22)
 
-160 hours, 395 files, all public domain LibriVox, seeded by
+**132 hours, 331 files, 10,672 indexed passages**, all public domain LibriVox,
+seeded by
 `scripts/seed_featured.py`. The script names **archive.org identifiers**, not
 URLs, and fetches the file list from the metadata API at run time -- 117 files
 is 117 chances to hand-type chapter 40 before chapter 4, and part order is the
@@ -654,6 +655,26 @@ next time:
   every interruption started from zero.
 
 All three are fixed the same way: save as you go, atomically, and resume.
+
+## The Voice Agent hangs up on an idle listener (2026-09-22)
+
+A session bills **$0.075/minute of websocket**, silence included, so someone
+who starts a session and then simply listens to the book costs $4.50 an hour
+and asks nothing. During a public judging window that was the only unbounded
+number in the project. `IDLE_MS` (5 minutes without speech) now calls
+`stopSession()`; the book keeps playing and the button goes back to offering
+the microphone. `touchIdle()` is reset by `input.speech.started` and cleared by
+`stopSession()`, because a timer outliving its session would stop the next one.
+
+Two things that are NOT liveness checks, learned the hard way:
+
+- **`/api/health` returning `ok:true` does not mean the demo works.** It checks
+  that an agent id is *configured*, not that a token can be minted. With a
+  negative balance it stayed green while `/api/session` returned
+  `Insufficient funds` and nobody could ask the book anything.
+- **A shell pipeline's exit code is the last command's.** `python … | tail`
+  reports `tail`'s success and hides a Python crash entirely. If a script
+  "succeeds" with no output, suspect the pipe.
 
 ## Open and untested (as of 2026-09-20)
 

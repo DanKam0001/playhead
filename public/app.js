@@ -1279,6 +1279,7 @@ function unlockAudio() {
 // browser's recording indicator off; closing the socket alone does not.
 function stopSession() {
   live = false;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
   try { if (micNode) micNode.disconnect(); } catch (_) { /* already gone */ }
   micNode = null;
@@ -1309,6 +1310,31 @@ function setListenIcon(on) {
   live = on;
   startBtn.textContent = on ? "Stop listening" : "Enable asking questions";
   startBtn.classList.toggle("live", on);
+}
+
+// ---------- hanging up on an idle session ----------
+//
+// The Voice Agent bills per minute of **session**, including every minute
+// nobody says anything, because it is a websocket held open. A listener who
+// starts a session and then just listens to the book for an hour costs
+// $4.50 and asks nothing. During a public judging window that is the only
+// unbounded number in the whole project.
+//
+// So a session that has heard no speech for a while hangs up on itself. The
+// book keeps playing -- that is the point; nothing about listening stops --
+// and the button goes back to offering the microphone.
+const IDLE_MS = 5 * 60 * 1000;
+let idleTimer = null;
+
+function touchIdle() {
+  if (idleTimer) clearTimeout(idleTimer);
+  if (!live) return;
+  idleTimer = setTimeout(() => {
+    if (!live) return;
+    debug(`no questions for ${IDLE_MS / 60000} minutes; releasing the session`);
+    stopSession();
+    setStatus("still listening to the book — tap to ask again", "idle");
+  }, IDLE_MS);
 }
 
 async function start() {
@@ -1391,6 +1417,7 @@ async function start() {
         heartbeat = setInterval(reportPlayhead, 1000);
         live = true;
         setListenIcon(true);
+        touchIdle();
         // Re-enable it: the button was disabled to stop a second connection
         // being opened while this one was still handshaking, and it now means
         // "stop listening". Left disabled it read as a dead control, and the
@@ -1402,6 +1429,7 @@ async function start() {
         break;
 
       case "input.speech.started":
+        touchIdle();          // somebody is still here
         // A new question starts here, so anything that moved the playhead
         // before it is history. Without this a chapter click half an hour ago
         // still suppressed the three-second rewind on the next answer, and
