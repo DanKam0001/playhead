@@ -24,3 +24,6 @@ LAUNCH.md
 # Throwaway pages used for headless screenshots.
 web/_*.html
 data/.spend_cache.json
+
+# Video production files (includes a voice clone), not for the public repo
+video/

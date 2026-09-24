@@ -496,6 +496,52 @@ which is the one per-session channel the model definitely reads.
 Any future per-listener behaviour should go the same way rather than trying to
 mutate the stored agent.
 
+## Every listener gets their own agent (2026-09-23)
+
+**AssemblyAI calls an HTTP tool anonymously.** Checked against a live call: the
+body is only the model's arguments (`{}` for `passage_at_playhead`), and the
+headers are Vercel's proxy headers -- nothing names the session. And HTTP tools
+cannot be set per session: `session.update` rejects `agent_id` alongside any
+other field ("mutually exclusive"), and rejects HTTP tools outright ("define
+them on a stored agent"). So with one shared agent every tool call was a guess,
+and the store answered with whoever reported a playhead last. Two listeners at
+once got each other's passages -- exactly the judging-window case.
+
+**Fix:** `/api/session` creates a stored agent per session from `agent.json`,
+with `?session_id=<id>` pinned on every tool URL. AssemblyAI keeps URL query
+params on the request (verified live), so `_tool_session()` reads the id back.
+~0.6 s per create. `/api/session/end` deletes it (the client sends a beacon on
+hang-up and on `pagehide`); `_sweep_session_agents()` deletes any
+`playhead-session-*` older than 3 h, at most every 10 min. If a create fails, the
+shared agent is returned, i.e. the old single-listener behaviour.
+
+Verified live with two simultaneous probe sessions on different books: each got
+its own passage. `tests/test_session_agents.py` holds it without network.
+
+**Consequence:** `agent.json` is now read at every session start, so editing it
+changes behaviour on the next deploy without `create_agent.py`. Still republish
+the shared agent, because it is the fallback.
+
+**"Short" answers:** the system prompt said "two or three sentences" and the
+short rule came last in a long tool response, so the model split the difference
+(two long sentences). The length rule is now the FIRST line of the tool result,
+with a word cap, and the prompt says that line overrides it. Verified: 18 words.
+
+## Look-back is the listener's choice, capped at 5 minutes (2026-09-24)
+
+The page has a "Look back" setting (30 s / 90 s / 3 min / 5 min) that rides the
+playhead heartbeat as `lookback`, like `brevity`. The server clamps it to
+`LOOKBACK_MIN_S`..`LOOKBACK_MAX_S` (30-300) regardless of what the page sends.
+
+**Why 300:** AssemblyAI truncates an HTTP tool response at 8 KiB (see their
+HTTP tools doc). Five minutes of narration is ~6 passages of ~630 chars, about
+4 KB, leaving room for the rest of the message. `_trim_passage()` also keeps the
+passage under `PASSAGE_BUDGET_CHARS` from the old end, because the newest words
+are what "that" points at. Do not raise the cap without re-checking that budget.
+
+Tested live on the Monte Cristo smile: 5 minutes did not change the answer (the
+treasure motive is further back than that), so do not claim it as a showcase.
+
 ## Tests
 
 `pytest` — 116 tests, no keys, no network, no audio hardware. That is a hard
@@ -713,8 +759,9 @@ Two things that are NOT liveness checks, learned the hard way:
   confirmed working server-side.
 - **The agent still may answer a fragment** if the listener pauses mid-question.
   Fix via the stored agent's turn detection, not client-side stitching.
-- The agent does not reliably pass `session_id` to tools, so the store falls
-  back to the freshest playhead. Correct for one listener; wrong for many.
+- ~~The agent does not reliably pass `session_id` to tools~~ -- fixed
+  2026-09-23 with one stored agent per session; see "Every listener gets their
+  own agent" above.
 
 ## Demo / submission material
 

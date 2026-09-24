@@ -14,6 +14,7 @@ Position answers it exactly.
 import os
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -102,6 +103,27 @@ class Playhead(BaseModel):
     seconds: float
     book: Optional[str] = None
     brevity: Optional[str] = None
+    lookback: Optional[float] = None
+
+
+# How far back "what did that mean?" may look, chosen by the listener. The cap is
+# not arbitrary: AssemblyAI truncates a tool response at 8 KiB, and five minutes
+# of narration (~6 passages of ~630 chars) is the most that fits with room to
+# spare. The passage text is also trimmed to a budget in case a reader is fast.
+LOOKBACK_DEFAULT_S, LOOKBACK_MIN_S, LOOKBACK_MAX_S = 90.0, 30.0, 300.0
+PASSAGE_BUDGET_CHARS = 5500
+
+
+def _clamp_lookback(seconds) -> float:
+    try:
+        return max(LOOKBACK_MIN_S, min(LOOKBACK_MAX_S, float(seconds)))
+    except (TypeError, ValueError):
+        return LOOKBACK_DEFAULT_S
+
+
+def _lookback(session_id: Optional[str]) -> float:
+    raw = playheads.kv_get(f"playhead:lookback:{session_id}") if session_id else None
+    return _clamp_lookback(raw) if raw else LOOKBACK_DEFAULT_S
 
 
 @app.post("/api/playhead")
@@ -119,6 +141,8 @@ def report_playhead(p: Playhead):
         playheads.set_book(p.session_id, p.book)
     if p.brevity:
         playheads.set_brevity(p.session_id, p.brevity)
+    if p.lookback is not None:
+        playheads.kv_set(f"playhead:lookback:{p.session_id}", str(_clamp_lookback(p.lookback)), ttl=6 * 3600)
     # The same heartbeat carries jumps back. The agent cannot move the audio
     # itself -- it runs on AssemblyAI's servers -- so go_to_topic leaves a
     # pending position here and the browser collects it within the second.
@@ -166,13 +190,105 @@ def new_session():
         token = json.load(urllib.request.urlopen(req))["token"]
     except urllib.error.HTTPError as e:
         raise HTTPException(502, f"token mint failed: {e.read().decode()[:200]}")
+    session_id = f"s{int(time.time()*1000)}{os.urandom(3).hex()}"
     return {
         "token": token,
-        "agent_id": AGENT_ID,
-        "session_id": f"s{int(time.time()*1000)}{os.urandom(3).hex()}",
+        "agent_id": _session_agent(session_id),
+        "session_id": session_id,
         "book": BOOK,
         "duration": library.duration_hint(),
     }
+
+
+# ---------- one stored agent per listener ----------
+#
+# AssemblyAI calls an HTTP tool with the model's arguments and nothing else: no
+# session id, no header that identifies the conversation (checked against a
+# live call, 2026-09-23). HTTP tools cannot be set per session either --
+# session.update rejects them. So with one shared agent, every tool call is
+# anonymous, and the backend could only guess the listener from whoever
+# reported a playhead last. Two people listening at once got each other's
+# answers.
+#
+# The fix is to give each session its own copy of the agent, with the session
+# id pinned in the tool URLs. AssemblyAI keeps URL query params on the request,
+# so every tool call says exactly whose playhead it is about. Creating one takes
+# ~0.6 s. If it fails, the shared agent still works for a single listener.
+
+AGENTS_API = "https://agents.assemblyai.com/v1/agents"
+PUBLIC_URL = _setting("PUBLIC_URL", "https://playhead-app.vercel.app").rstrip("/")
+SESSION_AGENT_PREFIX = "playhead-session-"
+SESSION_AGENT_MAX_AGE_S = 3 * 3600
+_AGENT_SPEC = json.loads((ROOT / "server" / "agent.json").read_text(encoding="utf-8"))
+
+
+def _agents_call(method: str, url: str, body: Optional[dict] = None):
+    req = urllib.request.Request(url, json.dumps(body).encode() if body is not None else None,
+                                 method=method, headers={"Authorization": f"Bearer {AAI_KEY}",
+                                                         "Content-Type": "application/json"})
+    raw = urllib.request.urlopen(req, timeout=8).read()
+    return json.loads(raw) if raw else {}
+
+
+def _session_agent(session_id: str) -> str:
+    spec = json.loads(json.dumps(_AGENT_SPEC))
+    spec["name"] = SESSION_AGENT_PREFIX + session_id
+    for tool in spec.get("tools", []):
+        url = tool["http"]["url"].replace("__TOOL_BASE_URL__", PUBLIC_URL)
+        tool["http"]["url"] = f"{url}?session_id={session_id}"
+    try:
+        agent_id = _agents_call("POST", AGENTS_API, spec)["id"]
+    except Exception as exc:
+        print(f"[agents] per-session agent failed, using the shared one: {exc}")
+        return AGENT_ID
+    playheads.kv_set(f"playhead:agent:{session_id}", agent_id, ttl=SESSION_AGENT_MAX_AGE_S)
+    _sweep_session_agents()
+    return agent_id
+
+
+def _sweep_session_agents() -> None:
+    """Delete per-session agents older than a session can live. At most every 10 min."""
+    if playheads.kv_incr("playhead:agent-sweep", ttl=600) > 1:
+        return
+    try:
+        now = time.time()
+        for a in _agents_call("GET", AGENTS_API).get("agents", []):
+            if not a.get("name", "").startswith(SESSION_AGENT_PREFIX):
+                continue
+            created = datetime.fromisoformat(a["created_at"]).replace(tzinfo=timezone.utc).timestamp()
+            if now - created > SESSION_AGENT_MAX_AGE_S:
+                _agents_call("DELETE", f"{AGENTS_API}/{a['id']}")
+    except Exception as exc:
+        print(f"[agents] sweep failed: {exc}")
+
+
+class SessionEnd(BaseModel):
+    session_id: str
+
+
+@app.post("/api/session/end")
+def end_session(e: SessionEnd):
+    """Delete this listener's agent. Best effort: the sweep catches what this misses."""
+    agent_id = playheads.kv_get(f"playhead:agent:{e.session_id}")
+    if agent_id and agent_id != AGENT_ID:
+        try:
+            _agents_call("DELETE", f"{AGENTS_API}/{agent_id}")
+        except Exception as exc:
+            print(f"[agents] delete failed: {exc}")
+    return {"ok": True}
+
+
+def _trim_passage(text: str) -> str:
+    """Keep the newest PASSAGE_BUDGET_CHARS: the end is what "that" points at."""
+    if len(text) <= PASSAGE_BUDGET_CHARS:
+        return text
+    cut = text[-PASSAGE_BUDGET_CHARS:]
+    return "..." + cut[cut.find(" ") + 1:]
+
+
+def _tool_session(from_body: Optional[str], request: Request) -> Optional[str]:
+    """The session a tool call belongs to: pinned in the URL by _session_agent."""
+    return request.query_params.get("session_id") or from_body
 
 
 # ---------- AssemblyAI -> backend (the HTTP tool) ----------
@@ -183,28 +299,33 @@ class ToolCall(BaseModel):
 
 
 @app.post("/tools/passage_at_playhead")
-def passage_at_playhead(call: ToolCall):
+def passage_at_playhead(call: ToolCall, request: Request):
     """The whole idea, as one endpoint.
 
     Returns prose, not codes: the response is read by a language model that has
     to speak the answer, so a failure explains itself in a sentence it can say.
     """
-    t = playheads.get(call.session_id)
+    sid = _tool_session(call.session_id, request)
+    t = playheads.get(sid)
     if t is None:
         return {"ok": False,
                 "message": "I can't tell where you are in the book yet - "
                            "is it playing?"}
-    lib, _title = library_for(call.session_id)
-    near = lib.window(t)
+    lib, _title = library_for(sid)
+    back = _lookback(sid)
+    near = lib.window(t, before=back)
     if not near:
         return {"ok": False,
                 "message": f"There's no indexed text around {int(t)//60}:{int(t)%60:02d}."}
 
-    parts = [f"The listener is {int(t)//60} minutes {int(t)%60} seconds into the book.",
-             "This is what they have just heard:",
-             " ".join(c.text for c in near)]
+    # The length rule goes first: at the end of a long passage the model half-obeyed
+    # it (two long sentences for "one sentence").
+    parts = [_length_rule(sid), "",
+             f"The listener is {int(t)//60} minutes {int(t)%60} seconds into the book.",
+             f"This is what they have just heard (the last {int(back)} seconds):",
+             _trim_passage(" ".join(c.text for c in near))]
 
-    prior = playheads.get_context(call.session_id)
+    prior = playheads.get_context(sid)
     if prior:
         parts += ["", "This listener has asked before:", prior,
                   "Only mention this if it is relevant to what they just asked."]
@@ -215,7 +336,6 @@ def passage_at_playhead(call: ToolCall):
             parts += ["", f"Earlier in the book, on '{call.search}':",
                       " ".join(c.text for c in far)]
 
-    parts += ["", _length_rule(call.session_id)]
     return {"ok": True, "playhead_seconds": round(t, 1), "message": "\n".join(parts)}
 
 
@@ -225,7 +345,7 @@ class TopicCall(BaseModel):
 
 
 @app.post("/tools/go_to_topic")
-def go_to_topic(call: TopicCall):
+def go_to_topic(call: TopicCall, request: Request):
     """Navigation by meaning: the mirror image of passage_at_playhead.
 
     You cannot skim an audiobook. A sighted reader flips to the right page in
@@ -235,12 +355,13 @@ def go_to_topic(call: TopicCall):
     The spoiler cap deliberately does NOT apply here. It exists to stop the
     agent volunteering what is ahead; being asked to go there is consent.
     """
+    sid = _tool_session(call.session_id, request)
     vec = _embed(call.topic)
     if vec is None:
         return {"ok": False,
                 "message": "I can't look up topics right now - say roughly where "
                            "you want to go instead."}
-    lib, _title = library_for(call.session_id)
+    lib, _title = library_for(sid)
     hits = lib.search(vec, k=1)
     if not hits:
         return {"ok": False,
@@ -250,7 +371,7 @@ def go_to_topic(call: TopicCall):
     # Start a little before the passage, so the listener hears it introduced
     # rather than landing mid-sentence.
     start = max(0.0, target.start_s - 8)
-    playheads.request_seek(call.session_id, start)
+    playheads.request_seek(sid, start)
     return {"ok": True, "seek_seconds": round(start, 1),
             "message": (f"Moving the book to {int(start)//60}:{int(start)%60:02d}, "
                         f"where this comes up. Tell the listener where you are taking "
@@ -263,7 +384,7 @@ class OutlineCall(BaseModel):
 
 
 @app.post("/tools/book_outline")
-def book_outline(call: OutlineCall):
+def book_outline(call: OutlineCall, request: Request):
     """What the whole book covers, so someone knows what they are walking into.
 
     The spoiler cap exists to stop the agent *volunteering* what is ahead. Being
@@ -275,7 +396,8 @@ def book_outline(call: OutlineCall):
     Excerpts are sampled evenly across the duration rather than summarised by
     us. The agent already has a language model; what it lacks is the text.
     """
-    lib, title = library_for(call.session_id)
+    sid = _tool_session(call.session_id, request)
+    lib, title = library_for(sid)
     if not len(lib):
         return {"ok": False, "message": "There's no indexed book loaded right now."}
 
@@ -283,7 +405,7 @@ def book_outline(call: OutlineCall):
     if not picks:
         return {"ok": False, "message": "I couldn't read the book's contents just now."}
 
-    t = playheads.get(call.session_id)
+    t = playheads.get(sid)
     where = (f"They are {int(t)//60} minutes in." if t else "They are at the start.")
     body = "\n".join(f"[{int(c.start_s)//60:02d}:{int(c.start_s)%60:02d}] {c.text}"
                      for c in picks)
@@ -293,7 +415,7 @@ def book_outline(call: OutlineCall):
         f"Describe what this book covers and how it is organised, in three or "
         f"four sentences, so they know what they are getting into. They asked, "
         f"so telling them the shape of it is not a spoiler -- but if it is a "
-        f"story, do not give away how it ends.\n\n{_length_rule(call.session_id)}")}
+        f"story, do not give away how it ends.\n\n{_length_rule(sid)}")}
 
 
 def _length_rule(session_id: Optional[str]) -> str:
@@ -304,10 +426,10 @@ def _length_rule(session_id: Optional[str]) -> str:
     and that the model definitely reads.
     """
     if (playheads.get_brevity(session_id) or "full") == "short":
-        return ("ANSWER IN ONE SENTENCE. They have asked for short answers. Say the "
-                "single most useful thing and stop. Do not add context, caveats, "
-                "or a summary of what you just said.")
-    return ("Answer in two or three sentences. Do not restate the question, and "
+        return ("ANSWER LENGTH: ONE sentence, under 25 words. The listener chose short "
+                "answers. Say the single most useful thing and stop: no context, no "
+                "caveats, no second sentence.")
+    return ("ANSWER LENGTH: two or three sentences. Do not restate the question, and "
             "do not close by summarising what you just said.")
 
 

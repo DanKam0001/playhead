@@ -321,6 +321,7 @@ async function reportPlayhead() {
         seconds: pos(),
         book: currentBook ? currentBook.id : null,
         brevity,
+        lookback,
       }),
     });
     // The reply can carry a jump. go_to_topic runs on AssemblyAI's servers and
@@ -508,6 +509,9 @@ function buildSpeeds() {
 
 let answerMode = "pause";
 let brevity = "full";
+// Seconds of book an answer may look back over. The server clamps it to
+// 30-300 (tool responses are cut at 8 KiB), so this is a preference, not a limit.
+let lookback = 90;
 
 function applyAnswerMode(mode) {
   answerMode = mode === "duck" ? "duck" : "pause";
@@ -526,6 +530,23 @@ function applyBrevity(mode) {
   // Takes effect on the next heartbeat, so a change mid-session lands within
   // a second rather than waiting for a reconnect.
   reportPlayhead();
+}
+
+function applyLookback(seconds) {
+  const s = [30, 90, 180, 300].includes(Number(seconds)) ? Number(seconds) : 90;
+  lookback = s;
+  storageSet("playhead:lookback", s);
+  el("lookback").querySelectorAll("button").forEach((b) => {
+    b.setAttribute("aria-checked", String(Number(b.dataset.back) === s));
+  });
+  reportPlayhead();
+}
+
+function buildLookback() {
+  el("lookback").querySelectorAll("button").forEach((b) => {
+    b.addEventListener("click", () => applyLookback(b.dataset.back));
+  });
+  applyLookback(storageGet("playhead:lookback", 90));
 }
 
 function buildBrevity() {
@@ -1277,6 +1298,16 @@ function unlockAudio() {
 // answer to "stop listening to me" -- and it also made a bad session
 // unrecoverable without losing the page. Stopping the tracks is what turns the
 // browser's recording indicator off; closing the socket alone does not.
+// Each session gets its own stored agent (see _session_agent in server/main.py),
+// so hanging up asks the server to delete it. sendBeacon, because this also runs
+// as the tab closes, when an ordinary fetch would be cancelled.
+function releaseAgent() {
+  if (!session || !session.session_id) return;
+  const body = new Blob([JSON.stringify({ session_id: session.session_id })], { type: "application/json" });
+  try { navigator.sendBeacon("/api/session/end", body); } catch (_) { /* the server sweep catches it */ }
+}
+window.addEventListener("pagehide", releaseAgent);
+
 function stopSession() {
   live = false;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -1296,6 +1327,7 @@ function stopSession() {
     ws = null;
   }
   flushReply();
+  releaseAgent();
   session = null;
   agentSpeaking = false;
   openTurn = null;
@@ -1650,6 +1682,7 @@ migrateOldKeys();
 buildSpeeds();
 buildAnswerMode();
 buildBrevity();
+buildLookback();
 notes = storageGet(notesKey(), []);
 renderNotes();
 paintSpine();
