@@ -3,7 +3,9 @@
 **An audiobook you can interrupt.** Say *"wait, what did that last part mean?"*
 and it answers about the passage you just heard — then picks up where it left off.
 
-**Live: https://playhead-app.vercel.app** — press start, let it play, talk over it.
+**Live: https://playhead-app.vercel.app** — pick a book, press *Enable asking questions*,
+and talk over it. During judging, asking questions and adding books need the access
+code given in the lablab submission; listening is open to everyone.
 
 Built for the AssemblyAI Voice Agent Hackathon.
 
@@ -45,7 +47,25 @@ Two rules fall out of it:
   listener's position. Answering a chapter 3 question with chapter 12 material
   would spoil the book — a real failure, not a rounding error.
 
-`compare_rag.py` runs the two approaches side by side on the same questions.
+And three things the listener gets because of it:
+
+- **Vague questions work.** *"Sorry, I'm lost"* has even less in it than "what did
+  that mean?", and gets a recap of where you are.
+- **Named questions search everything already heard, and nothing after.** *"Who's
+  Lord Henry again?"* finds him from an hour earlier in the book.
+- **The look-back is the listener's choice:** 30 seconds to 5 minutes. The cap is
+  real — AssemblyAI stops a tool response at 8 KiB, and five minutes of narration
+  is what fits with room to spare.
+
+`compare_rag.py` runs the two approaches side by side on the same question:
+
+```bash
+python compare_rag.py --db data/calculus.db 600 "Wait, what did that actually mean?"
+```
+
+Asked ten minutes into the Calculus chapter, ordinary retrieval returns passages
+from 16:03, 13:58, 14:52 and 02:23 — three of four ahead of the listener.
+Playhead returns 08:23, 09:20 and 10:12.
 
 ## Bring your own audiobook
 
@@ -218,6 +238,15 @@ servers, so for local development use a tunnel (ngrok, cloudflared), not
 localhost. `GET /api/health` reports whether the agent is configured and which
 store is in use.
 
+### One agent per listener
+
+AssemblyAI calls an HTTP tool anonymously: the request carries the model's
+arguments and nothing that identifies the conversation, and a session cannot
+bring its own HTTP tools. So `/api/session` creates a stored agent for each
+listener with their session id pinned in the tool URLs, and deletes it when they
+hang up. Several people can use the demo at once without getting each other's
+answers — verified live with simultaneous listeners.
+
 ### Settings
 
 | Variable | Default | What it does |
@@ -225,9 +254,13 @@ store is in use.
 | `ASSEMBLYAI_API_KEY` | — | Required. STT, TTS, the agent, and transcription |
 | `GEMINI_API_KEY` | — | Embeddings. Without it, position retrieval still works; topic search does not |
 | `PLAYHEAD_AGENT_ID` | — | The stored agent, from `scripts/create_agent.py` |
-| `PLAYHEAD_BOOK` | `relativity` | Which baked-in index to ship as the default book |
+| `PLAYHEAD_BOOK` | `calculus` | Which baked-in index to ship as the default book |
+| `PLAYHEAD_PUBLIC_URL` | `https://playhead-app.vercel.app` | Base URL for the tool addresses in each listener's agent |
+| `PLAYHEAD_ACCESS_CODE` | — | If set, a voice session and adding a book need this code (header `x-access-code`). Listening stays open |
 | `PLAYHEAD_MAX_UPLOAD_MB` | `4` | Ceiling on a direct file upload |
-| `PLAYHEAD_MAX_SOURCE_MB` | `150` | Ceiling on a book fetched from a link |
+| `PLAYHEAD_MAX_SOURCE_MB` | `0` (off) | Ceiling on a book fetched from a link |
+| `PLAYHEAD_MAX_PARTS` | `80` | Most files one book may have |
+| `PLAYHEAD_RATE_PER_HOUR` | `0` (off) | Books one visitor may add per hour |
 | `UPSTASH_REDIS_REST_URL` / `_TOKEN` | — | Shared state. Without them it falls back to process memory, which is correct locally and **wrong on serverless** |
 
 The two size ceilings are settings rather than constants so a different host can
@@ -242,7 +275,7 @@ into the repo the way the shipped book is:
 
 ```bash
 python build_index.py path/to/book.mp3     # transcribe + chunk + embed to data/
-python compare_rag.py                      # position-first vs naive RAG
+python compare_rag.py --db data/book.db 600 "what did that mean?"   # position-first vs naive RAG
 pytest                                     # the full suite, no keys required
 ```
 

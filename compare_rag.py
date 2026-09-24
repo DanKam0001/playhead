@@ -106,7 +106,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("timestamp", nargs="?", type=float)
     ap.add_argument("question", nargs="*")
-    ap.add_argument("--db", default="data/relativity.db")
+    ap.add_argument("--db", default="data/calculus.db")
     ap.add_argument("--all", action="store_true", help="run the scripted questions")
     args = ap.parse_args()
 
