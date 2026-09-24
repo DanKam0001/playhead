@@ -97,3 +97,25 @@ def test_a_long_passage_is_trimmed_to_fit_the_tool_response_cap():
     out = main._trim_passage(text)
     assert len(out) <= main.PASSAGE_BUDGET_CHARS + 3
     assert out.endswith("word4999"), "the newest words are what 'that' points at"
+
+
+def test_access_code_guards_only_what_spends_credit(created, monkeypatch):
+    monkeypatch.setattr(main, "ACCESS_CODE", "LISTEN-TEST")
+    client = TestClient(main.app)
+    # Spending credit: refused without the code, or with the wrong one.
+    assert client.get("/api/session").status_code == 401
+    assert client.get("/api/session", headers={"x-access-code": "nope"}).status_code == 401
+    assert client.post("/api/books", json={"audio_url": "https://example.com/a.mp3"}).status_code == 401
+    assert client.post("/api/books/upload", content=b"x").status_code == 401
+    # The right code, in any case, gets past the gate (what happens next is not this test's business).
+    ok = client.post("/api/books", json={"audio_url": "https://example.com/a.mp3"}, headers={"x-access-code": "listen-test"})
+    assert ok.status_code != 401
+    # Listening stays open to everyone.
+    assert client.get("/api/books").status_code == 200
+    assert client.get("/api/health").json()["access_code"] is True
+
+
+def test_no_code_configured_means_open(created, monkeypatch):
+    monkeypatch.setattr(main, "ACCESS_CODE", "")
+    client = TestClient(main.app)
+    assert client.post("/api/books", json={"audio_url": "https://example.com/a.mp3"}).status_code != 401

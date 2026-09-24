@@ -14,3 +14,9 @@ build_index.py
 check_keys.py
 data/*.transcript.json
 tests/
+
+# Video production and submission assets: never part of the app bundle
+/video/
+/submission/
+LAUNCH.md
+PROGRESS.md

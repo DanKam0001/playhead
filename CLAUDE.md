@@ -542,6 +542,21 @@ are what "that" points at. Do not raise the cap without re-checking that budget.
 Tested live on the Monte Cristo smile: 5 minutes did not change the answer (the
 treasure motive is further back than that), so do not claim it as a showcase.
 
+## The judges' access code (2026-09-24)
+
+Listening is open to anyone. A voice session (`/api/session`) and adding a book
+(`POST /api/books`, `/api/books/upload`) spend AssemblyAI credit, so when the
+Vercel setting `PLAYHEAD_ACCESS_CODE` is set they need a matching
+`x-access-code` header (case-insensitive, constant-time compare), else 401. The
+page shows a code box on the 401, remembers the code in localStorage, and
+re-runs the refused action. `/api/health` reports `"access_code": true`.
+The code is NOT in the repo; it is given to judges in the lablab submission.
+Vercel applies a changed setting on the next deploy.
+
+**`.vercelignore` must exclude `/video/`.** The video production folder (raw
+footage, renders) pushed the bundle to 247 MB against Vercel's 225 MB function
+cap and failed the deploy.
+
 ## Tests
 
 `pytest` — 116 tests, no keys, no network, no audio hardware. That is a hard

@@ -380,6 +380,8 @@
   .shelf .retry:hover{background:var(--mark-soft)}
 
   .addrow{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px}
+  .codebox{margin:4px 0 16px}
+  .codebox .micnote{margin-bottom:8px}
   .addrow input[type=url], .addrow input[type=text]{
     flex:1; min-width:180px; font:inherit; font-size:13.5px; color:var(--ink);
     background:var(--bg); border:1px solid var(--rule-2); border-radius:3px;
@@ -486,6 +488,14 @@
          should say what they get to do. -->
     <button class="btn primary big" id="start">Enable asking questions</button>
     <p class="micnote" id="micnote">Turns on your microphone. Then just talk over the book &mdash; no button to hold.</p>
+    <!-- Shown only when the server asks for the judges' access code. -->
+    <div class="codebox" id="codebox" hidden>
+      <p class="micnote" id="codemsg">Asking questions and adding books need the judges&rsquo; access code. It&rsquo;s in the Playhead submission on lablab.ai. Listening is open to everyone.</p>
+      <div class="addrow">
+        <input type="text" id="codein" placeholder="Access code" aria-label="Judges' access code" autocomplete="off" autocapitalize="characters">
+        <button class="btn primary" id="codego" type="button">Unlock</button>
+      </div>
+    </div>
 
     <div class="transport">
       <button id="play" aria-label="Play or pause the book">

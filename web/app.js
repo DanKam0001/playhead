@@ -839,7 +839,30 @@ function clientId() {
   return id;
 }
 
-const withClient = (extra) => Object.assign({ "x-client-id": clientId() }, extra || {});
+const withClient = (extra) => Object.assign(
+  { "x-client-id": clientId(), "x-access-code": storageGet("playhead:code", "") }, extra || {});
+
+// The judges' access code. Listening is open; a voice session and adding a book
+// spend AssemblyAI credit, so the server refuses them without the code (401).
+// Ask once, remember it, and re-run what was refused.
+let afterCode = null;
+function askForCode(then, wrong) {
+  afterCode = then;
+  el("codebox").hidden = false;
+  el("codemsg").textContent = wrong
+    ? "That code didn't work. Check the Playhead submission on lablab.ai and try again."
+    : "Asking questions and adding books need the judges' access code. It's in the Playhead submission on lablab.ai. Listening is open to everyone.";
+  el("codein").focus();
+}
+function submitCode() {
+  const code = el("codein").value.trim();
+  if (!code) return;
+  storageSet("playhead:code", code);
+  el("codebox").hidden = true;
+  const then = afterCode;
+  afterCode = null;
+  if (then) then();
+}
 
 function addStatus(msg, bad) {
   const p = el("addstatus");
@@ -1125,6 +1148,12 @@ async function addByUrl(presetUrl, presetTitle) {
       headers: withClient({ "Content-Type": "application/json" }),
       body: JSON.stringify({ audio_url: url, title: presetTitle || "" }),
     });
+    if (res.status === 401) {
+      el("addbtn").disabled = false;
+      addStatus("Adding a book needs the judges' access code (above, under the microphone button).", true);
+      askForCode(() => addByUrl(presetUrl, presetTitle), !!storageGet("playhead:code", ""));
+      return;
+    }
     const rec = await res.json();
     if (!res.ok) throw new Error(rec.detail || "could not add that");
     if (!presetUrl) el("addurl").value = "";
@@ -1168,6 +1197,11 @@ async function addByFile(file) {
                             "x-book-title": file.name.replace(/\.[^.]+$/, "") }),
       body: file,
     });
+    if (res.status === 401) {
+      addStatus("Adding a book needs the judges' access code (above, under the microphone button).", true);
+      askForCode(() => addByFile(file), !!storageGet("playhead:code", ""));
+      return;
+    }
     const rec = await res.json();
     if (!res.ok) throw new Error(rec.detail || "upload failed");
     // The browser plays the listener's own copy; AssemblyAI got its own.
@@ -1379,7 +1413,15 @@ async function start() {
   startBtn.disabled = true;
   setStatus("connecting", "busy");
   try {
-    session = await (await fetch("/api/session")).json();
+    const res = await fetch("/api/session", { headers: withClient() });
+    if (res.status === 401) {
+      const hadCode = !!storageGet("playhead:code", "");
+      startBtn.disabled = false;
+      setStatus("needs the judges' access code", "idle");
+      askForCode(start, hadCode);
+      return;
+    }
+    session = await res.json();
     if (session.detail) throw new Error(session.detail);
   } catch (e) {
     setStatus("backend error: " + e.message, "error");
@@ -1683,6 +1725,8 @@ buildSpeeds();
 buildAnswerMode();
 buildBrevity();
 buildLookback();
+el("codego").addEventListener("click", submitCode);
+el("codein").addEventListener("keydown", (e) => { if (e.key === "Enter") submitCode(); });
 notes = storageGet(notesKey(), []);
 renderNotes();
 paintSpine();

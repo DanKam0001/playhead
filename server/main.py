@@ -20,6 +20,7 @@ from typing import Dict, Optional
 
 import urllib.error
 import urllib.request
+import hmac
 import json
 
 from dotenv import load_dotenv
@@ -176,9 +177,27 @@ def set_context(c: ContextPost):
     return {"ok": True, "carried": len(lines)}
 
 
+# ---------- the judges' access code ----------
+#
+# Listening is free and stays open to anyone. The two things that spend
+# AssemblyAI credit -- a voice session, and indexing a new book -- need the code
+# when PLAYHEAD_ACCESS_CODE is set (a Vercel setting, never in the repo; Vercel
+# applies a changed setting on the next deploy). Unset, everything is open, as before.
+ACCESS_CODE = _setting("ACCESS_CODE", "").strip()
+
+
+def _require_code(request: Request) -> None:
+    if not ACCESS_CODE:
+        return
+    given = request.headers.get("x-access-code", "").strip().upper()
+    if not hmac.compare_digest(given.encode(), ACCESS_CODE.upper().encode()):
+        raise HTTPException(401, "access code required")
+
+
 @app.get("/api/session")
-def new_session():
+def new_session(request: Request):
     """Mint a short-lived agent token plus the session id the browser will use."""
+    _require_code(request)
     if not AAI_KEY:
         raise HTTPException(500, "ASSEMBLYAI_API_KEY is not set on this deployment.")
     if not AGENT_ID:
@@ -618,6 +637,7 @@ def add_book(new: NewBook, request: Request):
     is no worker here, and a request that waited for a whole audiobook would be
     killed by the platform long before it finished.
     """
+    _require_code(request)
     if not AAI_KEY:
         raise HTTPException(500, "ASSEMBLYAI_API_KEY is not set on this deployment.")
     urls = [u.strip() for u in (new.audio_urls or [new.audio_url]) if u and u.strip()]
@@ -653,6 +673,7 @@ async def upload_book(request: Request):
     an episode; the page checks the size first and steers longer books to the
     URL form rather than letting them fail at the edge.
     """
+    _require_code(request)
     if not AAI_KEY:
         raise HTTPException(500, "ASSEMBLYAI_API_KEY is not set on this deployment.")
     _rate_limit(request)
@@ -746,7 +767,8 @@ def _title_from_url(url: str) -> str:
 @app.get("/api/health")
 def health():
     return {"ok": True, "book": BOOK, "chunks": len(library),
-            "agent_configured": bool(AGENT_ID), "store": playheads.kind}
+            "agent_configured": bool(AGENT_ID), "store": playheads.kind,
+            "access_code": bool(ACCESS_CODE)}
 
 
 # ---------- static ----------
